@@ -806,6 +806,7 @@
         const oppIndex = 1 - current;
         const opp = players[oppIndex];
         const side = oppIndex === 0 ? "L" : "R";
+        let hasOption = false;
         if (opp.pieces.length > 0) {
           statusEl.textContent = `${players[oppIndex].name} Tailwind: choose a piece to advance +1, or click a base to spawn.`;
           for (const pc of opp.pieces) {
@@ -820,6 +821,7 @@
                 pc.step = ns;
               finishTailwind();
             };
+            hasOption = true;
           }
           if (opp.pieces.length < 5) {
             for (let r = 0; r < rows; r++) {
@@ -836,6 +838,7 @@
                   });
                   finishTailwind();
                 };
+                hasOption = true;
               }
             }
           }
@@ -855,9 +858,11 @@
                 });
                 finishTailwind();
               };
+              hasOption = true;
             }
           }
         }
+        if (!hasOption) finishTailwind();
         function finishTailwind() {
           clearHighlights();
           mode = "preroll";
@@ -934,6 +939,50 @@
       }
       function bust() {
         const pl = players[current];
+        const kept = [];
+        for (const pc of pl.pieces) {
+          if (!pc.active) {
+            kept.push(pc);
+            continue;
+          }
+          const L = lanes[pc.r].L;
+          const sum = lanes[pc.r].sum;
+          const cps = checkpoints(L);
+          const dets = deterrents(L, sum);
+          const onDet = dets.includes(pc.step);
+          if (onDet || cps.includes(pc.step)) {
+            kept.push(pc);
+            continue;
+          }
+          let dest = null;
+          if (pc.carrying) {
+            for (const c of cps) {
+              if (c >= pc.step) {
+                dest = c;
+                break;
+              }
+            }
+          } else {
+            for (const c of cps) {
+              if (c <= pc.step) dest = c;
+            }
+          }
+          if (dest === null) {
+            if (pc.carrying && lanes[pc.r].basket) {
+              const ce = cells[pc.r][centerCol];
+              if (!ce.querySelector(".piece")) {
+                const b = document.createElement("div");
+                b.className = "piece";
+                b.textContent = "🧺";
+                ce.appendChild(b);
+              }
+            }
+          } else {
+            pc.step = dest;
+            kept.push(pc);
+          }
+        }
+        pl.pieces = kept;
         resolveDeterrents(pl);
         pl.pieces.forEach((p) => (p.active = false));
         nextPlayer();
