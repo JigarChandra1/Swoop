@@ -817,8 +817,10 @@
               const L = lanes[pc.r].L;
               const dir = pc.carrying ? -1 : +1;
               const ns = pc.step + dir;
-              if (ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns))
+              if (ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)) {
                 pc.step = ns;
+                afterMovePickup(pc);
+              }
               finishTailwind();
             };
             hasOption = true;
