@@ -248,7 +248,6 @@ function renderScores(){ document.getElementById('score0').textContent=players[0
 /* ---------- Buttons enable/disable ---------- */
 function canSwoopThisRoll(){
   if(!(mode==='pairChosen' && selectedPair)) return false;
-  if(!existsAnyMoveThisRoll()) return false; // bust => no swoop
   const pl=players[current];
   const actives = pl.pieces.filter(p=>p.active);
   if(actives.length===0) return false;
@@ -394,7 +393,6 @@ function potentialSwoops(pc){
 }
 function usePairForSwoop(){
   if(!(mode==='pairChosen' && selectedPair)) return;
-  if(!existsAnyMoveThisRoll()){ toast('Swoop not allowed on a bust.'); return; }
   const pl=players[current];
   const actives = pl.pieces.filter(p=>p.active);
   if(actives.length===0){ toast('No active piece to Swoop.'); return; }
