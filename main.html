@@ -1,1013 +1,622 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>SWOOP — Pass & Play (3 dice, choose any pair)</title>
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap"
-      rel="stylesheet"
-    />
-    <style>
-      :root {
-        --bg: #f6f7fb;
-        --card: #ffffff;
-        --ink: #1f2937;
-        --muted: #6b7280;
-        --accent: #2563eb;
-        --tile: #eef0f3;
-        --cp: #f5e5a3;
-        --det: #f3b0a3;
-        --center: #e6e1d6;
-        --line: #c9cfd8;
-        --danger: #ef4444;
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        margin: 0;
-        background: var(--bg);
-        font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-        color: #1f2937;
-      }
-      .wrap {
-        max-width: 1120px;
-        margin: 28px auto 56px;
-        padding: 0 16px;
-      }
-      h1 {
-        margin: 0 0 10px;
-        font-weight: 800;
-        letter-spacing: 0.2px;
-      }
-      .badges {
-        display: flex;
-        gap: 14px;
-        align-items: center;
-        float: right;
-      }
-      .badge {
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        padding: 6px 12px;
-        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06);
-        display: flex;
-        gap: 8px;
-        align-items: center;
-      }
-      .controls {
-        display: flex;
-        gap: 10px;
-        margin: 8px 0 12px;
-        flex-wrap: wrap;
-      }
-      button {
-        border: 0;
-        border-radius: 8px;
-        padding: 8px 12px;
-        background: #e5e7eb;
-        color: #111827;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      button.primary {
-        background: var(--accent);
-        color: #fff;
-      }
-      button:disabled {
-        opacity: 0.45;
-        cursor: not-allowed;
-      }
-      .board {
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 14px;
-        padding: 16px;
-        box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
-      }
-      .grid {
-        display: grid;
-        grid-template-columns: repeat(27, 28px);
-        grid-auto-rows: 28px;
-        gap: 4px;
-        justify-content: center;
-        padding: 10px;
-      }
-      .cell {
-        width: 28px;
-        height: 28px;
-        border-radius: 6px;
-        position: relative;
-      }
-      .tile {
-        background: var(--tile);
-        border: 1px solid #d7dbe1;
-      }
-      .cp {
-        background: var(--cp) !important;
-      }
-      .det {
-        background: var(--det) !important;
-      }
-      .center {
-        background: var(--center) !important;
-        border-style: dashed;
-      }
-      .highlight {
-        outline: 3px dashed #94a3b8;
-        outline-offset: 1px;
-        cursor: pointer;
-      }
-      .piece {
-        position: absolute;
-        inset: 0;
-        display: grid;
-        place-items: center;
-        font-size: 20px;
-      }
-      .piece.active {
-        font-size: 22px;
-      }
-      .piece.carry::after {
-        content: "🧺";
-        position: absolute;
-        right: -6px;
-        top: -10px;
-        font-size: 14px;
-      }
-      .ring {
-        position: absolute;
-        inset: -2px;
-        border-radius: 8px;
-        border: 2px solid var(--accent);
-        pointer-events: none;
-      }
-      .dir {
-        position: absolute;
-        bottom: -10px;
-        left: 2px;
-        font-size: 12px;
-        color: #374151;
-      }
-      .dice {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-      }
-      .die {
-        width: 34px;
-        height: 34px;
-        border-radius: 8px;
-        background: #111827;
-        color: #fff;
-        display: grid;
-        place-items: center;
-        font-weight: 800;
-      }
-      .pairs {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        margin-top: 8px;
-      }
-      .pair {
-        border: 1px dashed var(--line);
-        border-radius: 10px;
-        padding: 6px 10px;
-        background: #fff;
-        cursor: pointer;
-      }
-      .pair.selected {
-        border-color: var(--accent);
-        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
-      }
-      .note {
-        color: var(--muted);
-        font-size: 14px;
-        margin-top: 10px;
-      }
-      .strip {
-        display: flex;
-        gap: 8px;
-        align-items: center;
-        margin: 4px 0 6px;
-      }
-      .toast {
-        position: fixed;
-        right: 16px;
-        bottom: 16px;
-        background: #111827;
-        color: #fff;
-        padding: 10px 12px;
-        border-radius: 10px;
-        opacity: 0.95;
-      }
-      .cell small {
-        position: absolute;
-        bottom: 1px;
-        right: 3px;
-        font-size: 9px;
-        color: #6b7280;
-      }
-      .slope {
-        position: absolute;
-        bottom: 1px;
-        left: 3px;
-        font-size: 11px;
-        color: #374151;
-      }
-      .sumLabel {
-        position: relative;
-        top: 4px;
-        width: 28px;
-        text-align: center;
-        color: #6b7280;
-        font-weight: 700;
-      }
-      .warn {
-        color: var(--danger);
-        font-weight: 700;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <div class="strip">
-        <h1>Swoop — Pass & Play</h1>
-        <div class="badges">
-          <div class="badge">🐒 Monkeys&nbsp;<span id="score0">0</span></div>
-          <div class="badge">🕊️ Seagulls&nbsp;<span id="score1">0</span></div>
-        </div>
-      </div>
-
-      <div
-        id="status"
-        style="margin: 6px 0 2px; font-size: 18px; font-weight: 700"
-      >
-        Loading…
-      </div>
-
-      <div class="controls">
-        <button id="rollBtn" class="primary">Roll 3 Dice</button>
-        <button id="useMoveBtn" disabled>Use Pair → Move</button>
-        <button id="useSwoopBtn" disabled>Use Pair → Swoop</button>
-        <button id="bankBtn" disabled>Bank (Stop)</button>
-      </div>
-
-      <div class="dice" id="diceRow"></div>
-      <div class="pairs" id="pairRow"></div>
-
-      <div class="board">
-        <div class="grid" id="grid"></div>
-        <div class="note">
-          <strong>Legend:</strong> 🧺 Basket (even sums only); 🟡 Checkpoint; 🟥
-          Deterrent; 🐒/🐵 Monkeys; 🕊️/🦅 Seagulls.<br />
-          Steps count from each shore toward the center. Each roll is 3d6:
-          select any <em>pair</em> of dice. Spend that pair to
-          <strong>Move</strong> (+1 on the lane matching the sum; returning
-          pieces move −1) or to <strong>Swoop</strong> (adjacent lane; at
-          odd-lane top apply ↑/↓).<br />
-          <em>Bank</em> is only allowed before rolling. If a roll leaves no
-          legal pair-sum moves <em>or</em> Swoops, press
-          <strong>End Turn (Busted)</strong>.<br />
-          Deterrents trigger only on Bank/Bust; checkpoints are safe.
-          <span class="warn">Cells cannot hold more than one piece.</span> Max
-          pieces per player: <strong>5</strong>. Max
-          <em>active pieces this turn</em>: <strong>2</strong>.
-        </div>
-      </div>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SWOOP — Pass & Play (3 dice, choose any pair) — v5.2 (Save/Load)</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f6f7fb; --card:#ffffff; --ink:#1f2937; --muted:#6b7280;
+  --accent:#2563eb; --tile:#eef0f3; --cp:#f5e5a3; --det:#f3b0a3; --center:#e6e1d6;
+  --line:#c9cfd8; --danger:#ef4444;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:#1f2937}
+.wrap{max-width:1160px;margin:28px auto 56px;padding:0 16px;}
+h1{margin:0 0 10px;font-weight:800;letter-spacing:.2px}
+.badges{display:flex;gap:14px;align-items:center;float:right}
+.badge{background:#fff;border:1px solid var(--line);border-radius:12px;padding:6px 12px;box-shadow:0 3px 10px rgba(0,0,0,.06);display:flex;gap:8px;align-items:center}
+.controls{display:flex;gap:10px;margin:8px 0 12px;flex-wrap:wrap}
+button{border:0;border-radius:8px;padding:8px 12px;background:#e5e7eb;color:#111827;font-weight:700;cursor:pointer}
+button.primary{background:var(--accent);color:#fff}
+button.ghost{background:#f3f4f6}
+button:disabled{opacity:.45;cursor:not-allowed}
+.board{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 8px 20px rgba(0,0,0,.08)}
+.grid{display:grid;grid-template-columns:repeat(27,28px);grid-auto-rows:28px;gap:4px;justify-content:center;padding:10px}
+.cell{width:28px;height:28px;border-radius:6px;position:relative}
+.tile{background:var(--tile);border:1px solid #d7dbe1}
+.cp{background:var(--cp)!important}
+.det{background:var(--det)!important}
+.center{background:var(--center)!important;border-style:dashed}
+.highlight{outline:3px dashed #94a3b8;outline-offset:1px;cursor:pointer}
+.piece{position:absolute;inset:0;display:grid;place-items:center;font-size:20px}
+.piece.active{font-size:22px}
+.piece.carry::after{content:'🧺'; position:absolute; right:-6px; top:-10px; font-size:14px;}
+.ring{position:absolute;inset:-2px;border-radius:8px;border:2px solid var(--accent);pointer-events:none}
+.dir{position:absolute; bottom:-10px; left:2px; font-size:12px; color:#374151}
+.dice{display:flex;gap:8px;align-items:center}
+.die{width:34px;height:34px;border-radius:8px;background:#111827;color:#fff;display:grid;place-items:center;font-weight:800}
+.pairs{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.pair{border:1px dashed var(--line);border-radius:10px;padding:6px 10px;background:#fff;cursor:pointer}
+.pair.selected{border-color:var(--accent);box-shadow:0 0 0 2px rgba(37,99,235,.15)}
+.note{color:var(--muted);font-size:14px;margin-top:10px}
+.strip{display:flex;gap:8px;align-items:center;margin:4px 0 6px}
+.toast{position:fixed;right:16px;bottom:16px;background:#111827;color:#fff;padding:10px 12px;border-radius:10px;opacity:.95}
+.cell small{position:absolute;bottom:1px;right:3px;font-size:9px;color:#6b7280}
+.slope{position:absolute;bottom:1px;left:3px;font-size:11px;color:#374151}
+.sumLabel{position:relative;top:4px;width:28px;text-align:center;color:#6b7280;font-weight:700}
+.warn{color:var(--danger); font-weight:700}
+/* Modal */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;padding:20px}
+.modal .card{background:#fff;border-radius:12px;box-shadow:0 12px 30px rgba(0,0,0,.25);max-width:760px;width:100%;padding:16px;border:1px solid var(--line)}
+.modal .card h3{margin:0 0 8px}
+.modal textarea{width:100%;min-height:200px;border:1px solid var(--line);border-radius:8px;padding:10px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace}
+.modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+.small{font-size:12px;color:#6b7280}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="strip">
+    <h1>Swoop — Pass & Play</h1>
+    <div class="badges">
+      <div class="badge">🐒 Monkeys&nbsp;<span id="score0">0</span></div>
+      <div class="badge">🕊️ Seagulls&nbsp;<span id="score1">0</span></div>
     </div>
+  </div>
 
-    <div id="toast" class="toast" style="display: none"></div>
+  <div id="status" style="margin:6px 0 2px;font-size:18px;font-weight:700">Loading…</div>
 
-    <script>
-      const lanes = [
-        { sum: 2, L: 3, basket: true },
-        { sum: 3, L: 4, basket: false },
-        { sum: 4, L: 5, basket: true },
-        { sum: 5, L: 6, basket: false },
-        { sum: 6, L: 7, basket: true },
-        { sum: 7, L: 8, basket: false },
-        { sum: 8, L: 7, basket: true },
-        { sum: 9, L: 6, basket: false },
-        { sum: 10, L: 5, basket: true },
-        { sum: 11, L: 4, basket: false },
-        { sum: 12, L: 3, basket: true },
-      ];
-      function checkpoints(L) {
-        const out = [2];
-        if (L >= 6) out.push(4);
-        out.push(L - 1);
-        return [...new Set(out)].filter((x) => x >= 1 && x <= L);
-      }
-      function deterrents(L, sum) {
-        if (L <= 3) return [];
-        const det = [3, L - 2];
-        if ((sum === 6 || sum === 8) && L >= 5) det.push(5);
-        const cps = checkpoints(L);
-        return [...new Set(det)].filter(
-          (x) => x >= 1 && x <= L && !cps.includes(x)
-        );
-      }
-      const oddSlope = { 3: +1, 5: -1, 7: -1, 9: -1, 11: +1 };
+  <div class="controls">
+    <button id="rollBtn" class="primary">Roll 3 Dice</button>
+    <button id="useMoveBtn" disabled>Use Pair → Move</button>
+    <button id="useSwoopBtn" disabled>Use Pair → Swoop</button>
+    <button id="bankBtn" disabled>Bank (Stop)</button>
+    <span style="flex:1"></span>
+    <button id="newBtn" class="ghost">New Game</button>
+    <button id="saveBtn" class="ghost">Save</button>
+    <button id="loadBtn" class="ghost">Load</button>
+    <button id="qsaveBtn" class="ghost">Quick Save</button>
+    <button id="qloadBtn" class="ghost">Quick Load</button>
+  </div>
 
-      const grid = document.getElementById("grid");
-      const rows = lanes.length;
-      const cols = 27;
-      const centerCol = 13;
-      const leftStartCol = 1;
-      const rightEndCol = cols - 2;
-      const leftSpan = centerCol - leftStartCol - 1;
-      const rightSpan = rightEndCol - centerCol - 1;
+  <div class="dice" id="diceRow"></div>
+  <div class="pairs" id="pairRow"></div>
 
-      const cells = [];
-      for (let r = 0; r < rows; r++) {
-        const row = [];
-        const labelL = document.createElement("div");
-        labelL.className = "cell";
-        labelL.innerHTML = `<div class="sumLabel">${lanes[r].sum}</div>`;
-        grid.appendChild(labelL);
-        row.push(labelL);
-        for (let c = 1; c < cols - 1; c++) {
-          const d = document.createElement("div");
-          d.className = "cell";
-          grid.appendChild(d);
-          row.push(d);
+  <div class="board">
+    <div class="grid" id="grid"></div>
+    <div class="note">
+      <strong>Legend:</strong> 🧺 Basket (even sums only); 🟡 Checkpoint; 🟥 Deterrent; 🐒/🐵 Monkeys; 🕊️/🦅 Seagulls.<br/>
+      Steps count from each shore toward the center. Each roll is 3d6: select any <em>pair</em> of dice. Spend that pair to <strong>Move</strong> (+1 on the lane matching the sum; returning pieces move −1) or to <strong>Swoop</strong> (adjacent lane; at odd-lane top apply ↑/↓).<br/>
+      <em>Bank</em> is only allowed before rolling. If a roll leaves no legal pair-sum moves <em>or</em> Swoops, press <strong>End Turn (Busted)</strong>.<br/>
+      Deterrents trigger only on Bank/Bust; checkpoints are safe. <span class="warn">Cells cannot hold more than one piece.</span> Max pieces per player: <strong>5</strong>. Max <em>active pieces this turn</em>: <strong>2</strong>.
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" style="display:none"></div>
+
+<!-- Load modal -->
+<div id="loadModal" class="modal" aria-hidden="true">
+  <div class="card">
+    <h3>Load Game State</h3>
+    <p class="small">Paste a previously saved JSON state below, or choose a file. Loading replaces the current game.</p>
+    <textarea id="loadTextarea" placeholder='{"version":"v5.2","players":[...],...}'></textarea>
+    <div class="row">
+      <input type="file" id="fileInput" accept="application/json"/>
+      <span style="flex:1"></span>
+      <button id="cancelLoad">Cancel</button>
+      <button id="confirmLoad" class="primary">Load</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ---------- Core board config ---------- */
+const lanes = [
+  {sum:2, L:3, basket:true},
+  {sum:3, L:4, basket:false},
+  {sum:4, L:5, basket:true},
+  {sum:5, L:6, basket:false},
+  {sum:6, L:7, basket:true},
+  {sum:7, L:8, basket:false},
+  {sum:8, L:7, basket:true},
+  {sum:9, L:6, basket:false},
+  {sum:10, L:5, basket:true},
+  {sum:11, L:4, basket:false},
+  {sum:12, L:3, basket:true},
+];
+function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); return [...new Set(out)].filter(x=>x>=1&&x<=L); }
+function deterrents(L,sum){ if(L<=3) return []; const det=[3, L-2]; if((sum===6||sum===8)&&L>=5) det.push(5); const cps=checkpoints(L); return [...new Set(det)].filter(x=>x>=1&&x<=L && !cps.includes(x)); }
+const oddSlope = {3:+1, 5:-1, 7:-1, 9:-1, 11:+1};
+
+const grid = document.getElementById('grid');
+const rows = lanes.length;
+const cols = 27;
+const centerCol = 13;
+const leftStartCol = 1;
+const rightEndCol = cols-2;
+const leftSpan = centerCol - leftStartCol - 1;
+const rightSpan = rightEndCol - centerCol - 1;
+
+const cells = [];
+for(let r=0;r<rows;r++){
+  const row=[];
+  const labelL = document.createElement('div'); labelL.className='cell'; labelL.innerHTML=`<div class="sumLabel">${lanes[r].sum}</div>`; grid.appendChild(labelL); row.push(labelL);
+  for(let c=1;c<cols-1;c++){ const d=document.createElement('div'); d.className='cell'; grid.appendChild(d); row.push(d); }
+  const labelR = document.createElement('div'); labelR.className='cell'; labelR.innerHTML=`<div class="sumLabel">${lanes[r].sum}</div>`; grid.appendChild(labelR); row.push(labelR);
+  cells.push(row);
+}
+function colForStep(side, step, L){
+  if(side==='L'){ const rel=Math.round((leftSpan-1)*(step-1)/(L-1)); return leftStartCol+rel; }
+  const rel=Math.round((rightSpan-1)*(step-1)/(L-1)); return rightEndCol-rel;
+}
+for(let r=0;r<rows;r++){
+  const L=lanes[r].L, sum=lanes[r].sum;
+  const cps=checkpoints(L), dets=deterrents(L,sum);
+  for(let k=1;k<=L;k++){
+    const cL=colForStep('L',k,L), cR=colForStep('R',k,L);
+    const elL=cells[r][cL]; elL.classList.add('tile'); elL.dataset.r=r; elL.dataset.side='L'; elL.dataset.step=k;
+    const elR=cells[r][cR]; elR.classList.add('tile'); elR.dataset.r=r; elR.dataset.side='R'; elR.dataset.step=k;
+    if(cps.includes(k)){ elL.classList.add('cp'); elR.classList.add('cp'); }
+    if(dets.includes(k)){ elL.classList.add('det'); elR.classList.add('det'); }
+    const sL=document.createElement('small'); sL.textContent=k; elL.appendChild(sL);
+    const sR=document.createElement('small'); sR.textContent=k; elR.appendChild(sR);
+  }
+  const center=cells[r][centerCol]; center.classList.add('tile','center'); if(lanes[r].basket){ const b=document.createElement('div'); b.className='piece'; b.textContent='🧺'; center.appendChild(b); }
+}
+
+/* ---------- Helpers & state ---------- */
+function occupied(r, side, step){
+  for(let pi=0; pi<players.length; pi++){
+    for(const pc of players[pi].pieces){
+      if(pc.r===r && pc.side===side && pc.step===step) return true;
+    }
+  }
+  return false;
+}
+function pieceOnLane(pl, r){ return pl.pieces.find(p=>p.r===r); }
+function activeCount(pl){ return pl.pieces.filter(p=>p.active===true).length; }
+function isActiveForCurrent(pl, pc){ return pc.active===true; }
+
+const players=[
+  {name:'Monkeys', pieceIcon:'🐒', activeIcon:'🐵', score:0, pieces:[]},
+  {name:'Seagulls', pieceIcon:'🕊️', activeIcon:'🦅', score:0, pieces:[]}
+];
+// piece: {r, side:'L'|'R', step, carrying:boolean, active:boolean}
+
+let current=0;
+let rolled=null;
+let selectedPair=null;
+let mode='preroll';
+
+const statusEl=document.getElementById('status');
+const rollBtn=document.getElementById('rollBtn');
+const useMoveBtn=document.getElementById('useMoveBtn');
+const useSwoopBtn=document.getElementById('useSwoopBtn');
+const bankBtn=document.getElementById('bankBtn');
+const newBtn=document.getElementById('newBtn');
+const saveBtn=document.getElementById('saveBtn');
+const loadBtn=document.getElementById('loadBtn');
+const qsaveBtn=document.getElementById('qsaveBtn');
+const qloadBtn=document.getElementById('qloadBtn');
+const diceRow=document.getElementById('diceRow');
+const pairRow=document.getElementById('pairRow');
+const toastEl=document.getElementById('toast');
+
+/* ---------- UI helpers ---------- */
+function toast(m){ toastEl.textContent=m; toastEl.style.display='block'; setTimeout(()=>toastEl.style.display='none',1500); }
+
+function locate(r, side, step){
+  if(step===999) return cells[r][centerCol];
+  const L=lanes[r].L; if(step<1 || step> L) return null;
+  const c=colForStep(side,step,L); return cells[r][c];
+}
+
+function clearPieces(){
+  for(const row of cells) for(const el of row){
+    const old=el.querySelectorAll('.piece,.ring,.slope,.dir');
+    old.forEach(n=>n.remove());
+    el.classList.remove('highlight'); el.onclick=null;
+  }
+  // Center baskets (visual only)
+  for(let r=0;r<rows;r++){
+    const ce=cells[r][centerCol];
+    if(lanes[r].basket && !ce.querySelector('.piece')){
+      const b=document.createElement('div'); b.className='piece'; b.textContent='🧺'; ce.appendChild(b);
+    }
+  }
+}
+function placePieces(){
+  for(let pi=0; pi<players.length; pi++){
+    const pl=players[pi];
+    for(const pc of pl.pieces){
+      const el=locate(pc.r, pc.side, pc.step); if(!el) continue;
+      const div=document.createElement('div'); 
+      const useActiveIcon = (pi===current && isActiveForCurrent(pl,pc));
+      div.className='piece'+(useActiveIcon?' active':'');
+      div.textContent = useActiveIcon ? pl.activeIcon : pl.pieceIcon;
+      if(pc.carrying){ div.classList.add('carry'); const d=document.createElement('div'); d.className='dir'; d.textContent='↩'; el.appendChild(d); }
+      el.appendChild(div);
+      if(useActiveIcon){ const ring=document.createElement('div'); ring.className='ring'; el.appendChild(ring); }
+    }
+  }
+}
+function renderScores(){ document.getElementById('score0').textContent=players[0].score; document.getElementById('score1').textContent=players[1].score; }
+
+/* ---------- Buttons enable/disable ---------- */
+function canSwoopThisRoll(){
+  if(!(mode==='pairChosen' && selectedPair)) return false;
+  if(!existsAnyMoveThisRoll()) return false; // bust => no swoop
+  const pl=players[current];
+  const actives = pl.pieces.filter(p=>p.active);
+  if(actives.length===0) return false;
+  for(const pc of actives){
+    const dests = potentialSwoops(pc);
+    if(dests.length>0) return true;
+  }
+  return false;
+}
+function anyActionThisRoll(){ return existsAnyMoveThisRoll() || canSwoopThisRoll(); }
+
+function render(){
+  clearPieces(); placePieces(); renderScores();
+  rollBtn.disabled = !(mode==='preroll');
+  const canMove = (mode==='pairChosen' && selectedPair && canMoveOnSum(players[current], selectedPair.sum));
+  useMoveBtn.disabled = !canMove;
+  const canSwoop = canSwoopThisRoll();
+  useSwoopBtn.disabled = !canSwoop;
+  if(mode==='rolled' || mode==='pairChosen'){
+    const any = anyActionThisRoll();
+    bankBtn.textContent = any ? 'Bank (Stop)' : 'End Turn (Busted)';
+    bankBtn.disabled = any;
+  }else{ bankBtn.textContent='Bank (Stop)'; bankBtn.disabled=!(mode==='preroll'); }
+}
+
+/* ---------- Start/Next ---------- */
+function startGame(){ 
+  players[0].pieces=[]; players[1].pieces=[]; players[0].score=0; players[1].score=0;
+  current=0; rolled=null; selectedPair=null; mode='preroll';
+  diceRow.innerHTML=''; pairRow.innerHTML='';
+  render(); statusEl.textContent=`${players[current].name}, roll the dice!`;
+}
+function nextPlayer(){ 
+  players[current].pieces.forEach(p=>p.active=false);
+  current=1-current; rolled=null; selectedPair=null; mode='preroll'; diceRow.innerHTML=''; pairRow.innerHTML='';
+  render(); statusEl.textContent=`${players[current].name}, roll the dice!`; 
+}
+
+/* ---------- Dice / Pairs ---------- */
+function r6(){ return 1+Math.floor(Math.random()*6); }
+function renderDiceAndPairs(){
+  if(!rolled){ diceRow.innerHTML=''; pairRow.innerHTML=''; return; }
+  const d=rolled.d;
+  diceRow.innerHTML=d.map(v=>`<div class="die">${v}</div>`).join('');
+  pairRow.innerHTML=rolled.pairs.map((p,i)=>`<div class="pair ${selectedPair && selectedPair.i===p.i && selectedPair.j===p.j?'selected':''}" data-i="${i}">${d[p.i]} + ${d[p.j]} = <b>${p.sum}</b></div>`).join('');
+  Array.from(pairRow.children).forEach(el=>{ el.onclick=()=>{ Array.from(pairRow.children).forEach(x=>x.classList.remove('selected')); el.classList.add('selected'); selectedPair=rolled.pairs[+el.dataset.i]; mode='pairChosen'; render(); updateStatusAfterSelect(); }; });
+}
+function roll3(){
+  const d=[r6(),r6(),r6()]; rolled={ d, pairs: [[0,1],[0,2],[1,2]].map(([i,j])=>({i,j,sum:d[i]+d[j]})) };
+  selectedPair=null; mode='rolled'; renderDiceAndPairs();
+  if(!existsAnyMoveThisRoll()){
+    render();
+    statusEl.textContent=`${players[current].name} rolled ${d.join(' ')} — select a pair to Swoop or End Turn (Busted).`;
+  } else {
+    render();
+    statusEl.textContent=`${players[current].name}: select a pair, then Move or Swoop.`;
+  }
+}
+function updateStatusAfterSelect(){
+  if(mode!=='pairChosen') return;
+  const any = anyActionThisRoll();
+  const canMove = canMoveOnSum(players[current], selectedPair.sum);
+  const canSwoop = canSwoopThisRoll();
+  if(canMove && canSwoop) statusEl.textContent=`${players[current].name}: Move or Swoop.`;
+  else if(canMove) statusEl.textContent=`${players[current].name}: Move.`;
+  else if(canSwoop) statusEl.textContent=`${players[current].name}: Swoop or End Turn (Busted).`;
+  else statusEl.textContent=`${players[current].name}: End Turn (Busted).`;
+}
+
+/* ---------- Move/Swoop rules ---------- */
+function existsAnyMoveThisRoll(){
+  if(!rolled) return false;
+  const pl=players[current];
+  for(const pr of rolled.pairs){ if(canMoveOnSum(pl, pr.sum)) return true; }
+  return false;
+}
+function canMoveOnSum(pl, sum){
+  const r=lanes.findIndex(x=>x.sum===sum); if(r<0) return false;
+  const pc = pieceOnLane(pl, r);
+  const act = activeCount(pl);
+  if(pc){
+    const L=lanes[r].L; const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
+    if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
+      return true;  // existing piece moves regardless of active-lane count
+    }
+    return false;
+  } else {
+    const side=(pl===players[0])?'L':'R';
+    return (pl.pieces.length<5 && !occupied(r, side, 1) && act<2);
+  }
+}
+function ensurePieceForSum(pl, sum){
+  const r = lanes.findIndex(x=>x.sum===sum);
+  let pc = pieceOnLane(pl, r);
+  const side = (pl===players[0]) ? 'L' : 'R';
+  if(pc){
+    if(!pc.active && activeCount(pl)<2){ pc.active=true; }
+    return pc;
+  }
+  if(pl.pieces.length>=5 || activeCount(pl)>=2) return null;
+  if(occupied(r, side, 1)) return null;
+  pc = {r, side, step:1, carrying:false, active:true};
+  pl.pieces.push(pc);
+  return pc;
+}
+function afterMovePickup(pc){
+  const lane=lanes[pc.r]; const L=lane.L;
+  if(lane.basket && pc.step===L && !pc.carrying){
+    const ce=cells[pc.r][centerCol]; const basket=ce.querySelector('.piece');
+    if(basket){ basket.remove(); pc.carrying=true; toast('Picked up basket!'); }
+  }
+}
+function usePairForMove(){
+  if(!(mode==='pairChosen' && selectedPair)) return;
+  const pl = players[current]; const s=selectedPair.sum;
+  if(!canMoveOnSum(pl, s)){ toast('That sum cannot move.'); return; }
+  const beforeCount = pl.pieces.length;
+  const pc = ensurePieceForSum(pl, s); if(!pc) { toast('No available piece/slot.'); return; }
+  if(pl.pieces.length>beforeCount){
+    // just activated new lane; piece remains at step 1
+  }else{
+    const L = lanes[pc.r].L;
+    const dir = pc.carrying ? -1 : +1;
+    const ns = pc.step + dir;
+    if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)){ toast('Blocked.'); return; }
+    pc.step = ns;
+    afterMovePickup(pc);
+  }
+  rolled=null; selectedPair=null; mode='preroll'; diceRow.innerHTML=''; pairRow.innerHTML='';
+  render(); statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;
+}
+function potentialSwoops(pc){
+  const targets=[]; const r=pc.r; const L=lanes[r].L; const sum=lanes[r].sum;
+  const atOddTop = (sum%2===1) && (pc.step===L-1);
+  for(const dr of [-1,+1]){
+    const r2=r+dr; if(r2<0||r2>=rows) continue;
+    let step2 = pc.step;
+    if(atOddTop){ step2 = Math.min(lanes[r2].L, Math.max(1, pc.step + oddSlope[sum])); }
+    step2 = Math.min(lanes[r2].L, step2);
+    if(!occupied(r2, pc.side, step2)) targets.push({r:r2, step:step2});
+  }
+  return targets;
+}
+function usePairForSwoop(){
+  if(!(mode==='pairChosen' && selectedPair)) return;
+  if(!existsAnyMoveThisRoll()){ toast('Swoop not allowed on a bust.'); return; }
+  const pl=players[current];
+  const actives = pl.pieces.filter(p=>p.active);
+  if(actives.length===0){ toast('No active piece to Swoop.'); return; }
+  mode='chooseSwoop';
+  clearPieces(); placePieces();
+  statusEl.textContent = `${pl.name}: click an active piece to Swoop.`;
+  for(const pc of actives){
+    const el = locate(pc.r, pc.side, pc.step); if(!el) continue;
+    el.classList.add('highlight'); el.onclick = ()=>{
+      clearHighlights();
+      const dests = potentialSwoops(pc);
+      for(const d of dests){
+        const cell = locate(d.r, pc.side, d.step);
+        if(!cell) continue;
+        cell.classList.add('highlight');
+        if((lanes[pc.r].sum%2===1) && (pc.step===lanes[pc.r].L-1)){
+          const s=document.createElement('div'); s.className='slope'; s.textContent = (oddSlope[lanes[pc.r].sum]===1?'↑':'↓'); cell.appendChild(s);
         }
-        const labelR = document.createElement("div");
-        labelR.className = "cell";
-        labelR.innerHTML = `<div class="sumLabel">${lanes[r].sum}</div>`;
-        grid.appendChild(labelR);
-        row.push(labelR);
-        cells.push(row);
-      }
-      function colForStep(side, step, L) {
-        if (side === "L") {
-          const rel = Math.round(((leftSpan - 1) * (step - 1)) / (L - 1));
-          return leftStartCol + rel;
-        }
-        const rel = Math.round(((rightSpan - 1) * (step - 1)) / (L - 1));
-        return rightEndCol - rel;
-      }
-      for (let r = 0; r < rows; r++) {
-        const L = lanes[r].L,
-          sum = lanes[r].sum;
-        const cps = checkpoints(L),
-          dets = deterrents(L, sum);
-        for (let k = 1; k <= L; k++) {
-          const cL = colForStep("L", k, L),
-            cR = colForStep("R", k, L);
-          const elL = cells[r][cL];
-          elL.classList.add("tile");
-          elL.dataset.r = r;
-          elL.dataset.side = "L";
-          elL.dataset.step = k;
-          const elR = cells[r][cR];
-          elR.classList.add("tile");
-          elR.dataset.r = r;
-          elR.dataset.side = "R";
-          elR.dataset.step = k;
-          if (cps.includes(k)) {
-            elL.classList.add("cp");
-            elR.classList.add("cp");
-          }
-          if (dets.includes(k)) {
-            elL.classList.add("det");
-            elR.classList.add("det");
-          }
-          const sL = document.createElement("small");
-          sL.textContent = k;
-          elL.appendChild(sL);
-          const sR = document.createElement("small");
-          sR.textContent = k;
-          elR.appendChild(sR);
-        }
-        const center = cells[r][centerCol];
-        center.classList.add("tile", "center");
-        if (lanes[r].basket) {
-          const b = document.createElement("div");
-          b.className = "piece";
-          b.textContent = "🧺";
-          center.appendChild(b);
-        }
-      }
-
-      function occupied(r, side, step) {
-        for (let pi = 0; pi < players.length; pi++) {
-          for (const pc of players[pi].pieces) {
-            if (pc.r === r && pc.side === side && pc.step === step) return true;
-          }
-        }
-        return false;
-      }
-      function pieceOnLane(pl, r) {
-        return pl.pieces.find((p) => p.r === r);
-      }
-      function activeCount(pl) {
-        return pl.pieces.filter((p) => p.active === true).length;
-      }
-      function isActiveForCurrent(pl, pc) {
-        return pc.active === true;
-      }
-
-      const players = [
-        {
-          name: "Monkeys",
-          pieceIcon: "🐒",
-          activeIcon: "🐵",
-          score: 0,
-          pieces: [],
-        },
-        {
-          name: "Seagulls",
-          pieceIcon: "🕊️",
-          activeIcon: "🦅",
-          score: 0,
-          pieces: [],
-        },
-      ];
-      // piece: {r, side:'L'|'R', step, carrying:boolean, active:boolean}
-
-      let current = 0;
-      let rolled = null;
-      let selectedPair = null;
-      let mode = "preroll";
-
-      const statusEl = document.getElementById("status");
-      const rollBtn = document.getElementById("rollBtn");
-      const useMoveBtn = document.getElementById("useMoveBtn");
-      const useSwoopBtn = document.getElementById("useSwoopBtn");
-      const bankBtn = document.getElementById("bankBtn");
-      const diceRow = document.getElementById("diceRow");
-      const pairRow = document.getElementById("pairRow");
-      const toastEl = document.getElementById("toast");
-
-      function toast(m) {
-        toastEl.textContent = m;
-        toastEl.style.display = "block";
-        setTimeout(() => (toastEl.style.display = "none"), 1400);
-      }
-
-      function locate(r, side, step) {
-        if (step === 999) return cells[r][centerCol];
-        const L = lanes[r].L;
-        if (step < 1 || step > L) return null;
-        const c = colForStep(side, step, L);
-        return cells[r][c];
-      }
-
-      function clearPieces() {
-        for (const row of cells)
-          for (const el of row) {
-            const old = el.querySelectorAll(".piece,.ring,.slope,.dir");
-            old.forEach((n) => n.remove());
-            el.classList.remove("highlight");
-            el.onclick = null;
-          }
-        for (let r = 0; r < rows; r++) {
-          const ce = cells[r][centerCol];
-          if (lanes[r].basket && !ce.querySelector(".piece")) {
-            const b = document.createElement("div");
-            b.className = "piece";
-            b.textContent = "🧺";
-            ce.appendChild(b);
-          }
-        }
-      }
-      function placePieces() {
-        for (let pi = 0; pi < players.length; pi++) {
-          const pl = players[pi];
-          for (const pc of pl.pieces) {
-            const el = locate(pc.r, pc.side, pc.step);
-            if (!el) continue;
-            const div = document.createElement("div");
-            const useActiveIcon = pi === current && isActiveForCurrent(pl, pc);
-            div.className = "piece" + (useActiveIcon ? " active" : "");
-            div.textContent = useActiveIcon ? pl.activeIcon : pl.pieceIcon;
-            if (pc.carrying) {
-              div.classList.add("carry");
-              const d = document.createElement("div");
-              d.className = "dir";
-              d.textContent = "↩";
-              el.appendChild(d);
-            }
-            el.appendChild(div);
-            if (useActiveIcon) {
-              const ring = document.createElement("div");
-              ring.className = "ring";
-              el.appendChild(ring);
-            }
-          }
-        }
-      }
-      function renderScores() {
-        document.getElementById("score0").textContent = players[0].score;
-        document.getElementById("score1").textContent = players[1].score;
-      }
-
-      function canSwoopThisRoll() {
-        if (!(mode === "pairChosen" && selectedPair)) return false;
-        const pl = players[current];
-        const actives = pl.pieces.filter((p) => p.active);
-        if (actives.length === 0) return false;
-        for (const pc of actives) {
-          const dests = potentialSwoops(pc);
-          if (dests.length > 0) return true;
-        }
-        return false;
-      }
-
-      function anyActionThisRoll() {
-        return existsAnyMoveThisRoll() || canSwoopThisRoll();
-      }
-
-      function render() {
-        clearPieces();
-        placePieces();
-        renderScores();
-        rollBtn.disabled = !(mode === "preroll");
-        const canMove =
-          mode === "pairChosen" &&
-          selectedPair &&
-          canMoveOnSum(players[current], selectedPair.sum);
-        useMoveBtn.disabled = !canMove;
-        const canSwoop = canSwoopThisRoll();
-        useSwoopBtn.disabled = !canSwoop;
-        if (mode === "rolled" || mode === "pairChosen") {
-          const any = anyActionThisRoll();
-          bankBtn.textContent = any ? "Bank (Stop)" : "End Turn (Busted)";
-          bankBtn.disabled = any;
-        } else {
-          bankBtn.textContent = "Bank (Stop)";
-          bankBtn.disabled = !(mode === "preroll");
-        }
-      }
-
-      function startGame() {
-        players[0].pieces = [];
-        players[1].pieces = [];
-        current = 0;
-        rolled = null;
-        selectedPair = null;
-        mode = "preroll";
-        render();
-        statusEl.textContent = `${players[current].name}, roll the dice!`;
-      }
-      function nextPlayer() {
-        players[current].pieces.forEach((p) => (p.active = false));
-        current = 1 - current;
-        rolled = null;
-        selectedPair = null;
-        mode = "preroll";
-        render();
-        statusEl.textContent = `${players[current].name}, roll the dice!`;
-      }
-
-      function roll3() {
-        const d = [r6(), r6(), r6()];
-        rolled = {
-          d,
-          pairs: [
-            [0, 1],
-            [0, 2],
-            [1, 2],
-          ].map(([i, j]) => ({ i, j, sum: d[i] + d[j] })),
+        cell.onclick = ()=>{
+          pc.r=d.r; pc.step=d.step;
+          rolled=null; selectedPair=null; diceRow.innerHTML=''; pairRow.innerHTML='';
+          render(); triggerTailwindSelection();
         };
-        selectedPair = null;
-        mode = "rolled";
-        diceRow.innerHTML = d
-          .map((v) => `<div class="die">${v}</div>`)
-          .join("");
-        pairRow.innerHTML = rolled.pairs
-          .map(
-            (p, i) =>
-              `<div class="pair" data-i="${i}">${d[p.i]} + ${d[p.j]} = <b>${
-                p.sum
-              }</b></div>`
-          )
-          .join("");
-        Array.from(pairRow.children).forEach((el) => {
-          el.onclick = () => {
-            Array.from(pairRow.children).forEach((x) =>
-              x.classList.remove("selected")
-            );
-            el.classList.add("selected");
-            selectedPair = rolled.pairs[+el.dataset.i];
-            mode = "pairChosen";
-            render();
-            updateStatusAfterSelect();
-          };
-        });
-        if (!existsAnyMoveThisRoll()) {
-          render();
-          statusEl.textContent = `${players[current].name} rolled ${d.join(
-            " "
-          )} — select a pair to Swoop or End Turn (Busted).`;
-        } else {
-          render();
-          statusEl.textContent = `${players[current].name}: select a pair, then Move or Swoop.`;
-        }
       }
-      function updateStatusAfterSelect() {
-        if (mode !== "pairChosen") return;
-        const any = anyActionThisRoll();
-        const canMove = canMoveOnSum(players[current], selectedPair.sum);
-        const canSwoop = canSwoopThisRoll();
-        if (canMove && canSwoop)
-          statusEl.textContent = `${players[current].name}: Move or Swoop.`;
-        else if (canMove)
-          statusEl.textContent = `${players[current].name}: Move.`;
-        else if (canSwoop)
-          statusEl.textContent = `${players[current].name}: Swoop or End Turn (Busted).`;
-        else
-          statusEl.textContent = `${players[current].name}: End Turn (Busted).`;
-      }
-      function r6() {
-        return 1 + Math.floor(Math.random() * 6);
-      }
+    };
+  }
+}
+function clearHighlights(){ for(const row of cells) for(const el of row){ el.classList.remove('highlight'); el.onclick=null; const hints=el.querySelectorAll('.slope'); hints.forEach(n=>n.remove()); } placePieces(); }
 
-      function existsAnyMoveThisRoll() {
-        if (!rolled) return false;
-        const pl = players[current];
-        for (const pr of rolled.pairs) {
-          if (canMoveOnSum(pl, pr.sum)) return true;
+/* ---------- Tailwind ---------- */
+function triggerTailwindSelection(){
+  mode='tailwind'; render();
+  const oppIndex = 1-current; const opp = players[oppIndex];
+  const side = (oppIndex===0?'L':'R');
+  let hasOption=false;
+  if(opp.pieces.length>0){
+    statusEl.textContent = `${players[oppIndex].name} Tailwind: choose a piece to advance +1, or click a base to spawn.`;
+    for(const pc of opp.pieces){
+      const el = locate(pc.r, pc.side, pc.step); if(!el) continue;
+      el.classList.add('highlight'); el.onclick = ()=>{
+        const L=lanes[pc.r].L; const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
+        if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)) { pc.step = ns; afterMovePickup(pc); }
+        finishTailwind();
+      }; hasOption=true;
+    }
+    if(opp.pieces.length < 5){
+      for(let r=0;r<rows;r++){
+        const base = locate(r, side, 1);
+        if(base && !occupied(r, side, 1)){
+          base.classList.add('highlight'); base.onclick = ()=>{
+            opp.pieces.push({r, side, step:1, carrying:false, active:false});
+            finishTailwind();
+          }; hasOption=true;
         }
-        return false;
       }
-      function canMoveOnSum(pl, sum) {
-        const r = lanes.findIndex((x) => x.sum === sum);
-        if (r < 0) return false;
-        const pc = pieceOnLane(pl, r);
-        const act = activeCount(pl);
-        if (pc) {
-          const L = lanes[r].L;
-          const dir = pc.carrying ? -1 : +1;
-          const ns = pc.step + dir;
-          if (ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)) {
-            if (pc.active || act < 2) return true;
-          }
-        } else {
-          const side = pl === players[0] ? "L" : "R";
-          if (pl.pieces.length < 5 && !occupied(r, side, 1) && act < 2)
-            return true;
-        }
-        return false;
+    }
+  } else {
+    statusEl.textContent = `${players[oppIndex].name} Tailwind: click a base (step 1) to spawn a piece.`;
+    for(let r=0;r<rows;r++){
+      const base = locate(r, side, 1);
+      if(base && !occupied(r, side, 1)){
+        base.classList.add('highlight'); base.onclick = ()=>{
+          opp.pieces.push({r, side, step:1, carrying:false, active:false});
+          finishTailwind();
+        }; hasOption=true;
       }
+    }
+  }
+  if(!hasOption) finishTailwind();
+  function finishTailwind(){
+    clearHighlights(); mode='preroll'; render(); statusEl.textContent = `${players[current].name}: Roll or Bank.`;
+  }
+}
 
-      function ensurePieceForSum(pl, sum) {
-        const r = lanes.findIndex((x) => x.sum === sum);
-        let pc = pieceOnLane(pl, r);
-        const side = pl === players[0] ? "L" : "R";
-        if (pc) {
-          if (!pc.active) {
-            if (activeCount(pl) >= 2) {
-              return null;
-            }
-            pc.active = true;
-          }
-          return pc;
-        }
-        if (pl.pieces.length >= 5 || activeCount(pl) >= 2) return null;
-        if (occupied(r, side, 1)) return null;
-        pc = { r, side, step: 1, carrying: false, active: true };
-        pl.pieces.push(pc);
-        return pc;
+/* ---------- End turn logic ---------- */
+function resolveDeterrents(pl){
+  pl.pieces = pl.pieces.filter(pc=>{
+    const L=lanes[pc.r].L; const sum=lanes[pc.r].sum;
+    const dets = deterrents(L,sum);
+    const onDet = dets.includes(pc.step);
+    if(onDet){
+      if(pc.carrying && lanes[pc.r].basket){
+        const ce=cells[pc.r][centerCol];
+        if(!ce.querySelector('.piece')){ const b=document.createElement('div'); b.className='piece'; b.textContent='🧺'; ce.appendChild(b); }
       }
+      return false;
+    }
+    return true;
+  });
+}
+function bank(){
+  const pl = players[current];
+  const kept=[];
+  for(const pc of pl.pieces){
+    const L=lanes[pc.r].L; const cps = checkpoints(L);
+    if(pc.step===L && lanes[pc.r].basket && !pc.carrying){
+      const ce=cells[pc.r][centerCol]; const basket=ce.querySelector('.piece');
+      if(basket){ basket.remove(); pc.carrying=true; toast('Picked up basket!'); }
+    }
+    if(pc.carrying){
+      kept.push(pc);
+    }else{
+      let dest = null;
+      for(const c of cps){ if(c<=pc.step) dest=c; }
+      if(dest===null){ /* falls off */ }
+      else { pc.step = dest; kept.push(pc); }
+    }
+  }
+  pl.pieces = kept;
+  resolveDeterrents(pl);
+  let delivered=0;
+  pl.pieces = pl.pieces.filter(pc=>{
+    if(pc.carrying && pc.step===1){ delivered++; return false; }
+    return true;
+  });
+  pl.score += delivered; if(delivered) toast(`${pl.name} delivered ${delivered}.`);
+  pl.pieces.forEach(p=>p.active=false);
+  nextPlayer();
+}
+function bust(){
+  const pl = players[current];
+  const kept=[];
+  for(const pc of pl.pieces){
+    if(!pc.active){ kept.push(pc); continue; }
+    const L=lanes[pc.r].L; const sum=lanes[pc.r].sum;
+    const cps = checkpoints(L); const dets = deterrents(L,sum);
+    const onDet = dets.includes(pc.step);
+    if(onDet || cps.includes(pc.step)){ kept.push(pc); continue; }
+    let dest = null;
+    if(pc.carrying){ for(const c of cps){ if(c>=pc.step){ dest=c; break; } } }
+    else { for(const c of cps){ if(c<=pc.step) dest=c; } }
+    if(dest===null){
+      if(pc.carrying && lanes[pc.r].basket){
+        const ce=cells[pc.r][centerCol];
+        if(!ce.querySelector('.piece')){ const b=document.createElement('div'); b.className='piece'; b.textContent='🧺'; ce.appendChild(b); }
+      }
+    } else { pc.step = dest; kept.push(pc); }
+  }
+  pl.pieces = kept;
+  resolveDeterrents(pl);
+  pl.pieces.forEach(p=>p.active=false);
+  nextPlayer();
+}
 
-      function afterMovePickup(pc) {
-        const lane = lanes[pc.r];
-        const L = lane.L;
-        if (lane.basket && pc.step === L && !pc.carrying) {
-          const ce = cells[pc.r][centerCol];
-          const basket = ce.querySelector(".piece");
-          if (basket) {
-            basket.remove();
-            pc.carrying = true;
-            toast("Picked up basket!");
-          }
-        }
-      }
+/* ---------- Save / Load ---------- */
+function getState(){
+  return {
+    version: 'v5.2',
+    players: players.map(p=>({name:p.name, score:p.score, pieces:p.pieces.map(x=>({...x}))})),
+    current,
+    mode,
+    rolled: rolled ? {d:[...rolled.d], pairs:[...rolled.pairs]} : null,
+    selectedPair: selectedPair ? {...selectedPair} : null
+  };
+}
+function setState(state){
+  try{
+    players[0].score = state.players[0].score;
+    players[1].score = state.players[1].score;
+    players[0].pieces = state.players[0].pieces || [];
+    players[1].pieces = state.players[1].pieces || [];
+    current = (state.current===0 || state.current===1) ? state.current : 0;
+    mode = state.mode || 'preroll';
+    rolled = state.rolled ? {d:[...state.rolled.d], pairs:[...state.rolled.pairs]} : null;
+    selectedPair = state.selectedPair || null;
+    renderDiceAndPairs();
+    render();
+    statusEl.textContent = `Loaded game. ${players[current].name}'s turn.`;
+  }catch(e){
+    console.error(e); toast('Invalid state.'); 
+  }
+}
+function saveToFile(){
+  const blob = new Blob([JSON.stringify(getState(), null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href=url; a.download = 'swoop_state.json'; a.click();
+  URL.revokeObjectURL(url);
+}
+function openLoadModal(){
+  document.getElementById('loadTextarea').value='';
+  document.getElementById('fileInput').value='';
+  document.getElementById('loadModal').style.display='flex';
+}
+function closeLoadModal(){ document.getElementById('loadModal').style.display='none'; }
+function loadFromText(txt){
+  try{
+    const state = JSON.parse(txt);
+    setState(state);
+    closeLoadModal();
+  }catch(e){ console.error(e); toast('Could not parse JSON.'); }
+}
+document.getElementById('confirmLoad').onclick = ()=>{
+  const txt = document.getElementById('loadTextarea').value.trim();
+  if(txt) loadFromText(txt); else toast('Paste JSON or choose a file.');
+};
+document.getElementById('cancelLoad').onclick = closeLoadModal;
+document.getElementById('fileInput').addEventListener('change', (ev)=>{
+  const f = ev.target.files && ev.target.files[0]; if(!f) return;
+  const rd = new FileReader();
+  rd.onload = ()=> loadFromText(rd.result);
+  rd.readAsText(f);
+});
+function quickSave(){ localStorage.setItem('SWOOP_STATE_V52', JSON.stringify(getState())); toast('Saved to browser.'); }
+function quickLoad(){ const txt = localStorage.getItem('SWOOP_STATE_V52'); if(!txt){ toast('No quick save found.'); return; } loadFromText(txt); }
 
-      function usePairForMove() {
-        if (!(mode === "pairChosen" && selectedPair)) return;
-        const pl = players[current];
-        const s = selectedPair.sum;
-        if (!canMoveOnSum(pl, s)) {
-          toast("That sum cannot move.");
-          return;
-        }
-        const beforeCount = pl.pieces.length;
-        const pc = ensurePieceForSum(pl, s);
-        if (!pc) {
-          toast("No available piece/slot.");
-          return;
-        }
-        if (pl.pieces.length > beforeCount) {
-          // just activated new lane; piece remains at step 1
-        } else {
-          const L = lanes[pc.r].L;
-          const dir = pc.carrying ? -1 : +1;
-          const ns = pc.step + dir;
-          if (ns < 1 || ns > L || occupied(pc.r, pc.side, ns)) {
-            toast("Blocked.");
-            return;
-          }
-          pc.step = ns;
-          afterMovePickup(pc);
-        }
-        rolled = null;
-        selectedPair = null;
-        mode = "preroll";
-        diceRow.innerHTML = "";
-        pairRow.innerHTML = "";
-        render();
-        statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;
-      }
+/* ---------- Wire up buttons ---------- */
+rollBtn.onclick = ()=>{ if(mode!=='preroll') return; roll3(); };
+useMoveBtn.onclick = ()=> usePairForMove();
+useSwoopBtn.onclick = ()=> usePairForSwoop();
+bankBtn.onclick = ()=>{
+  if(mode==='preroll'){ bank(); }
+  else if((mode==='rolled' || mode==='pairChosen') && !anyActionThisRoll()){ bust(); }
+};
+newBtn.onclick = startGame;
+saveBtn.onclick = saveToFile;
+loadBtn.onclick = openLoadModal;
+qsaveBtn.onclick = quickSave;
+qloadBtn.onclick = quickLoad;
 
-      function potentialSwoops(pc) {
-        const targets = [];
-        const r = pc.r;
-        const L = lanes[r].L;
-        const sum = lanes[r].sum;
-        const atOddTop = sum % 2 === 1 && pc.step === L - 1;
-        for (const dr of [-1, +1]) {
-          const r2 = r + dr;
-          if (r2 < 0 || r2 >= rows) continue;
-          let step2 = pc.step;
-          if (atOddTop) {
-            step2 = Math.min(lanes[r2].L, Math.max(1, pc.step + oddSlope[sum]));
-          }
-          step2 = Math.min(lanes[r2].L, step2);
-          if (!occupied(r2, pc.side, step2))
-            targets.push({ r: r2, step: step2 });
-        }
-        return targets;
-      }
-
-      function usePairForSwoop() {
-        if (!(mode === "pairChosen" && selectedPair)) return;
-        const pl = players[current];
-        const actives = pl.pieces.filter((p) => p.active);
-        if (actives.length === 0) {
-          toast("No active piece to Swoop.");
-          return;
-        }
-        mode = "chooseSwoop";
-        clearPieces();
-        placePieces();
-        statusEl.textContent = `${pl.name}: click an active piece to Swoop.`;
-        for (const pc of actives) {
-          const el = locate(pc.r, pc.side, pc.step);
-          if (!el) continue;
-          el.classList.add("highlight");
-          el.onclick = () => {
-            clearHighlights();
-            const dests = potentialSwoops(pc);
-            for (const d of dests) {
-              const cell = locate(d.r, pc.side, d.step);
-              if (!cell) continue;
-              cell.classList.add("highlight");
-              if (lanes[pc.r].sum % 2 === 1 && pc.step === lanes[pc.r].L - 1) {
-                const s = document.createElement("div");
-                s.className = "slope";
-                s.textContent = oddSlope[lanes[pc.r].sum] === 1 ? "↑" : "↓";
-                cell.appendChild(s);
-              }
-              cell.onclick = () => {
-                pc.r = d.r;
-                pc.step = d.step;
-                rolled = null;
-                selectedPair = null;
-                diceRow.innerHTML = "";
-                pairRow.innerHTML = "";
-                render();
-                triggerTailwindSelection();
-              };
-            }
-          };
-        }
-      }
-      function clearHighlights() {
-        for (const row of cells)
-          for (const el of row) {
-            el.classList.remove("highlight");
-            el.onclick = null;
-            const hints = el.querySelectorAll(".slope");
-            hints.forEach((n) => n.remove());
-          }
-        placePieces();
-      }
-
-      function triggerTailwindSelection() {
-        mode = "tailwind";
-        render();
-        const oppIndex = 1 - current;
-        const opp = players[oppIndex];
-        const side = oppIndex === 0 ? "L" : "R";
-        let hasOption = false;
-        if (opp.pieces.length > 0) {
-          statusEl.textContent = `${players[oppIndex].name} Tailwind: choose a piece to advance +1, or click a base to spawn.`;
-          for (const pc of opp.pieces) {
-            const el = locate(pc.r, pc.side, pc.step);
-            if (!el) continue;
-            el.classList.add("highlight");
-            el.onclick = () => {
-              const L = lanes[pc.r].L;
-              const dir = pc.carrying ? -1 : +1;
-              const ns = pc.step + dir;
-              if (ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)) {
-                pc.step = ns;
-                afterMovePickup(pc);
-              }
-              finishTailwind();
-            };
-            hasOption = true;
-          }
-          if (opp.pieces.length < 5) {
-            for (let r = 0; r < rows; r++) {
-              const base = locate(r, side, 1);
-              if (base && !occupied(r, side, 1)) {
-                base.classList.add("highlight");
-                base.onclick = () => {
-                  opp.pieces.push({
-                    r,
-                    side,
-                    step: 1,
-                    carrying: false,
-                    active: false,
-                  });
-                  finishTailwind();
-                };
-                hasOption = true;
-              }
-            }
-          }
-        } else {
-          statusEl.textContent = `${players[oppIndex].name} Tailwind: click a base (step 1) to spawn a piece.`;
-          for (let r = 0; r < rows; r++) {
-            const base = locate(r, side, 1);
-            if (base && !occupied(r, side, 1)) {
-              base.classList.add("highlight");
-              base.onclick = () => {
-                opp.pieces.push({
-                  r,
-                  side,
-                  step: 1,
-                  carrying: false,
-                  active: false,
-                });
-                finishTailwind();
-              };
-              hasOption = true;
-            }
-          }
-        }
-        if (!hasOption) finishTailwind();
-        function finishTailwind() {
-          clearHighlights();
-          mode = "preroll";
-          render();
-          statusEl.textContent = `${players[current].name}: Roll or Bank.`;
-        }
-      }
-
-      function resolveDeterrents(pl) {
-        pl.pieces = pl.pieces.filter((pc) => {
-          const L = lanes[pc.r].L;
-          const sum = lanes[pc.r].sum;
-          const dets = deterrents(L, sum);
-          const onDet = dets.includes(pc.step);
-          if (onDet) {
-            if (pc.carrying && lanes[pc.r].basket) {
-              const ce = cells[pc.r][centerCol];
-              if (!ce.querySelector(".piece")) {
-                const b = document.createElement("div");
-                b.className = "piece";
-                b.textContent = "🧺";
-                ce.appendChild(b);
-              }
-            }
-            return false;
-          }
-          return true;
-        });
-      }
-      function bank() {
-        const pl = players[current];
-        const kept = [];
-        for (const pc of pl.pieces) {
-          const L = lanes[pc.r].L;
-          const cps = checkpoints(L);
-          if (pc.step === L && lanes[pc.r].basket && !pc.carrying) {
-            const ce = cells[pc.r][centerCol];
-            const basket = ce.querySelector(".piece");
-            if (basket) {
-              basket.remove();
-              pc.carrying = true;
-              toast("Picked up basket!");
-            }
-          }
-          if (pc.carrying) {
-            kept.push(pc);
-          } else {
-            let dest = null;
-            for (const c of cps) {
-              if (c <= pc.step) dest = c;
-            }
-            if (dest === null) {
-              /* falls off */
-            } else {
-              pc.step = dest;
-              kept.push(pc);
-            }
-          }
-        }
-        pl.pieces = kept;
-        resolveDeterrents(pl);
-        let delivered = 0;
-        pl.pieces = pl.pieces.filter((pc) => {
-          if (pc.carrying && pc.step === 1) {
-            delivered++;
-            return false;
-          }
-          return true;
-        });
-        pl.score += delivered;
-        if (delivered) toast(`${pl.name} delivered ${delivered}.`);
-        pl.pieces.forEach((p) => (p.active = false));
-        nextPlayer();
-      }
-      function bust() {
-        const pl = players[current];
-        const kept = [];
-        for (const pc of pl.pieces) {
-          if (!pc.active) {
-            kept.push(pc);
-            continue;
-          }
-          const L = lanes[pc.r].L;
-          const sum = lanes[pc.r].sum;
-          const cps = checkpoints(L);
-          const dets = deterrents(L, sum);
-          const onDet = dets.includes(pc.step);
-          if (onDet || cps.includes(pc.step)) {
-            kept.push(pc);
-            continue;
-          }
-          let dest = null;
-          if (pc.carrying) {
-            for (const c of cps) {
-              if (c >= pc.step) {
-                dest = c;
-                break;
-              }
-            }
-          } else {
-            for (const c of cps) {
-              if (c <= pc.step) dest = c;
-            }
-          }
-          if (dest === null) {
-            if (pc.carrying && lanes[pc.r].basket) {
-              const ce = cells[pc.r][centerCol];
-              if (!ce.querySelector(".piece")) {
-                const b = document.createElement("div");
-                b.className = "piece";
-                b.textContent = "🧺";
-                ce.appendChild(b);
-              }
-            }
-          } else {
-            pc.step = dest;
-            kept.push(pc);
-          }
-        }
-        pl.pieces = kept;
-        resolveDeterrents(pl);
-        pl.pieces.forEach((p) => (p.active = false));
-        nextPlayer();
-      }
-
-      rollBtn.onclick = () => {
-        if (mode !== "preroll") return;
-        roll3();
-      };
-      useMoveBtn.onclick = () => usePairForMove();
-      useSwoopBtn.onclick = () => usePairForSwoop();
-      bankBtn.onclick = () => {
-        if (mode === "preroll") {
-          bank();
-        } else if (
-          (mode === "rolled" || mode === "pairChosen") &&
-          !anyActionThisRoll()
-        ) {
-          bust();
-        }
-      };
-
-      startGame();
-    </script>
-  </body>
+/* ---------- Kickoff ---------- */
+startGame();
+</script>
+</body>
 </html>
