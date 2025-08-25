@@ -1,3 +1,142 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* Custom CSS Variables matching the original */
+:root {
+  --bg: #f6f7fb;
+  --card: #ffffff;
+  --ink: #1f2937;
+  --muted: #6b7280;
+  --accent: #2563eb;
+  --tile: #eef0f3;
+  --cp: #f5e5a3;
+  --det: #f3b0a3;
+  --center: #e6e1d6;
+  --line: #c9cfd8;
+  --danger: #ef4444;
+}
+
+/* Base styles */
+body {
+  margin: 0;
+  background: var(--bg);
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
+  color: var(--ink);
+}
+
+/* Custom component styles */
+.swoop-tile {
+  background: var(--tile);
+  border: 1px solid #d7dbe1;
+}
+
+.swoop-cp {
+  background: var(--cp) !important;
+}
+
+.swoop-det {
+  background: var(--det) !important;
+}
+
+.swoop-center {
+  background: var(--center) !important;
+  border-style: dashed;
+}
+
+.swoop-highlight {
+  outline: 3px dashed #94a3b8;
+  outline-offset: 1px;
+  cursor: pointer;
+}
+
+.swoop-piece {
+  position: relative;
+}
+
+.swoop-piece.active {
+  font-size: 1.25em;
+}
+
+.swoop-piece.carry::after {
+  content: '🧺';
+  position: absolute;
+  right: -6px;
+  top: -10px;
+  font-size: 0.875rem;
+}
+
+.swoop-ring {
+  position: absolute;
+  inset: -2px;
+  border-radius: 8px;
+  border: 2px solid var(--accent);
+  pointer-events: none;
+}
+
+.swoop-die {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  background: #111827;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+}
+
+.swoop-pair {
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.swoop-pair.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.swoop-badge {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 6px 12px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.swoop-board {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+}
+
+.swoop-button {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: #e5e7eb;
+  color: #111827;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.swoop-button.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.swoop-button.ghost {
+  background: #f3f4f6;
+}
+
+.swoop-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

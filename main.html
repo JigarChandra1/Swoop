@@ -249,9 +249,16 @@ function renderScores(){ document.getElementById('score0').textContent=players[0
 function canSwoopThisRoll(){
   if(!(mode==='pairChosen' && selectedPair)) return false;
   const pl=players[current];
-  const actives = pl.pieces.filter(p=>p.active);
-  if(actives.length===0) return false;
-  for(const pc of actives){
+  const selectedSum = selectedPair.sum;
+  const selectedLaneIndex = lanes.findIndex(lane => lane.sum === selectedSum);
+
+  // Only pieces on lanes adjacent to the selected sum can swoop
+  const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < lanes.length);
+  const adjacentSums = adjacentLaneIndices.map(idx => lanes[idx].sum);
+
+  const eligiblePieces = pl.pieces.filter(p => p.active && adjacentSums.includes(lanes[p.r].sum));
+  if(eligiblePieces.length===0) return false;
+  for(const pc of eligiblePieces){
     const dests = potentialSwoops(pc);
     if(dests.length>0) return true;
   }
@@ -394,12 +401,19 @@ function potentialSwoops(pc){
 function usePairForSwoop(){
   if(!(mode==='pairChosen' && selectedPair)) return;
   const pl=players[current];
-  const actives = pl.pieces.filter(p=>p.active);
-  if(actives.length===0){ toast('No active piece to Swoop.'); return; }
+  const selectedSum = selectedPair.sum;
+  const selectedLaneIndex = lanes.findIndex(lane => lane.sum === selectedSum);
+
+  // Only pieces on lanes adjacent to the selected sum can swoop
+  const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < lanes.length);
+  const adjacentSums = adjacentLaneIndices.map(idx => lanes[idx].sum);
+
+  const eligiblePieces = pl.pieces.filter(p => p.active && adjacentSums.includes(lanes[p.r].sum));
+  if(eligiblePieces.length===0){ toast('No eligible piece to Swoop (must be adjacent to selected sum).'); return; }
   mode='chooseSwoop';
   clearPieces(); placePieces();
   statusEl.textContent = `${pl.name}: click an active piece to Swoop.`;
-  for(const pc of actives){
+  for(const pc of eligiblePieces){
     const el = locate(pc.r, pc.side, pc.step); if(!el) continue;
     el.classList.add('highlight'); el.onclick = ()=>{
       clearHighlights();

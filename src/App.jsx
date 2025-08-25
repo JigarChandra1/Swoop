@@ -18,6 +18,24 @@ function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); ret
 function deterrents(L,sum){ if(L<=3) return []; const det=[3,L-2]; if((sum===6||sum===8)&&L>=5) det.push(5); const cps=checkpoints(L); return [...new Set(det)].filter(x=>x>=1&&x<=L && !cps.includes(x)); }
 const oddSlope={3:+1,5:-1,7:-1,9:-1,11:+1};
 
+// Grid layout constants matching the original
+const ROWS = LANES.length;
+const COLS = 27;
+const CENTER_COL = 13;
+const LEFT_START_COL = 1;
+const RIGHT_END_COL = COLS - 2;
+const LEFT_SPAN = CENTER_COL - LEFT_START_COL - 1;
+const RIGHT_SPAN = RIGHT_END_COL - CENTER_COL - 1;
+
+function colForStep(side, step, L) {
+  if (side === 'L') {
+    const rel = Math.round((LEFT_SPAN - 1) * (step - 1) / (L - 1));
+    return LEFT_START_COL + rel;
+  }
+  const rel = Math.round((RIGHT_SPAN - 1) * (step - 1) / (L - 1));
+  return RIGHT_END_COL - rel;
+}
+
 function initialGame(){
   return {
     players:[
@@ -37,6 +55,48 @@ function r6(){ return 1+Math.floor(Math.random()*6); }
 
 export default function App(){
   const [game,setGame] = React.useState(initialGame);
+  const [toast, setToast] = React.useState(null);
+  const [showLoadModal, setShowLoadModal] = React.useState(false);
+  const [loadText, setLoadText] = React.useState('');
+
+  function showToast(message) {
+    setToast(message);
+    setTimeout(() => setToast(null), 1500);
+  }
+
+  function existsAnyMoveThisRoll(){
+    if(!game.rolled) return false;
+    const pl=game.players[game.current];
+    // Check if any of the available pairs can be used for a move
+    for(const pr of game.rolled.pairs){
+      if(canMoveOnSum(pl, pr.sum)) return true;
+    }
+    return false;
+  }
+
+  function canSwoopThisRoll(){
+    if(!(game.mode==='pairChosen' && game.selectedPair)) return false;
+    const pl=game.players[game.current];
+    const selectedSum = game.selectedPair.sum;
+    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
+
+    // Only pieces on lanes adjacent to the selected sum can swoop
+    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
+    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
+
+    const eligiblePieces = pl.pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
+    for(const pc of eligiblePieces){ if(potentialSwoops(pc).length>0) return true; }
+    return false;
+  }
+
+  function anyActionThisRoll(){
+    // For rolled mode (no pair selected yet), check if any pair can move
+    if(game.mode === 'rolled') {
+      return existsAnyMoveThisRoll();
+    }
+    // For pairChosen mode, check if the selected pair can move or swoop
+    return existsAnyMoveThisRoll() || canSwoopThisRoll();
+  }
 
   function occupied(r,side,step){
     for(const pl of game.players){
@@ -51,13 +111,46 @@ export default function App(){
     if(game.mode!=='preroll') return;
     const d=[r6(),r6(),r6()];
     const pairs=[[0,1],[0,2],[1,2]].map(([i,j])=>({i,j,sum:d[i]+d[j]}));
-    setGame({...game, rolled:{d,pairs}, selectedPair:null, mode:'rolled', message:`${game.players[game.current].name}: select a pair.`});
+    const newGame = {...game, rolled:{d,pairs}, selectedPair:null, mode:'rolled'};
+
+    // Check if any pair can be used for movement
+    const pl = game.players[game.current];
+    let hasAnyMove = false;
+    for(const pr of pairs) {
+      if(canMoveOnSum(pl, pr.sum)) {
+        hasAnyMove = true;
+        break;
+      }
+    }
+
+    if(!hasAnyMove){
+      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — select a pair to Swoop or End Turn (Busted).`;
+    } else {
+      newGame.message = `${game.players[game.current].name}: select a pair, then Move or Swoop.`;
+    }
+
+    setGame(newGame);
   }
 
   function selectPair(i){
-    if(game.mode!=='rolled') return;
+    if(game.mode!=='rolled' && game.mode!=='pairChosen') return;
     const pair = game.rolled.pairs[i];
-    setGame({...game, selectedPair:pair, mode:'pairChosen', message:`${game.players[game.current].name}: Move or Swoop.`});
+    const newGame = {...game, selectedPair:pair, mode:'pairChosen'};
+
+    const canMove = canMoveOnSum(game.players[game.current], pair.sum);
+    const canSwoop = canSwoopThisRoll();
+
+    if(canMove && canSwoop) {
+      newGame.message = `${game.players[game.current].name}: Move or Swoop.`;
+    } else if(canMove) {
+      newGame.message = `${game.players[game.current].name}: Move.`;
+    } else if(canSwoop) {
+      newGame.message = `${game.players[game.current].name}: Swoop or End Turn (Busted).`;
+    } else {
+      newGame.message = `${game.players[game.current].name}: End Turn (Busted).`;
+    }
+
+    setGame(newGame);
   }
 
   function canMoveOnSum(pl,sum){
@@ -87,12 +180,12 @@ export default function App(){
     return pc;
   }
 
-  function afterMovePickup(pc){
+  function afterMovePickup(pc, newGame){
     const lane=LANES[pc.r]; const L=lane.L;
-    if(lane.basket && game.baskets[pc.r] && pc.step===L && !pc.carrying){
+    if(lane.basket && newGame.baskets[pc.r] && pc.step===L && !pc.carrying){
       pc.carrying=true;
-      const baskets=[...game.baskets]; baskets[pc.r]=false;
-      setGame({...game, baskets, message:`${game.players[game.current].name} picked up a basket!`});
+      newGame.baskets[pc.r]=false;
+      showToast('Picked up basket!');
       return true;
     }
     return false;
@@ -100,18 +193,31 @@ export default function App(){
 
   function useMove(){
     if(!(game.mode==='pairChosen' && game.selectedPair)) return;
-    const pl=game.players[game.current]; const sum=game.selectedPair.sum;
+    const newGame = {...game};
+    const pl=newGame.players[newGame.current];
+    const sum=newGame.selectedPair.sum;
     if(!canMoveOnSum(pl,sum)) return;
+
     const before=pl.pieces.length;
-    const pc=ensurePieceForSum(pl,sum); if(!pc) return;
+    const pc=ensurePieceForSum(pl,sum);
+    if(!pc) return;
+
     if(pl.pieces.length>before){
       // spawned new piece at step 1
     }else{
-      const L=LANES[pc.r].L; const dir=pc.carrying?-1:+1; const ns=pc.step+dir;
+      const L=LANES[pc.r].L;
+      const dir=pc.carrying?-1:+1;
+      const ns=pc.step+dir;
       if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)) return;
-      pc.step=ns; afterMovePickup(pc);
+      pc.step=ns;
+      afterMovePickup(pc, newGame);
     }
-    setGame({...game, rolled:null, selectedPair:null, mode:'preroll', message:`${pl.name}: Roll or Bank.`});
+
+    newGame.rolled=null;
+    newGame.selectedPair=null;
+    newGame.mode='preroll';
+    newGame.message=`${pl.name}: Roll or Bank.`;
+    setGame(newGame);
   }
 
   function potentialSwoops(pc){
@@ -130,83 +236,267 @@ export default function App(){
   function useSwoop(){
     if(!(game.mode==='pairChosen' && game.selectedPair)) return;
     const pl=game.players[game.current];
-    const actives=pl.pieces.filter(p=>p.active);
-    if(actives.length===0) return;
-    setGame({...game, mode:'chooseSwoop'});
+    const selectedSum = game.selectedPair.sum;
+    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
+
+    // Only pieces on lanes adjacent to the selected sum can swoop
+    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
+    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
+
+    const eligiblePieces = pl.pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
+    if(eligiblePieces.length===0) return;
+
+    const newGame = {...game, mode:'chooseSwoop'};
+    newGame.message = `${pl.name}: click an active piece to Swoop.`;
+    setGame(newGame);
   }
 
   function chooseSwoopPiece(pc){
     const dests=potentialSwoops(pc);
-    setGame({...game, mode:'pickSwoopDest', swoopSource:pc, swoopTargets:dests});
+    const newGame = {...game, mode:'pickSwoopDest', swoopSource:pc, swoopTargets:dests};
+    newGame.message = `${game.players[game.current].name}: click destination for Swoop.`;
+    setGame(newGame);
   }
 
   function finalizeSwoop(pc,target){
+    const newGame = {...game};
     pc.r=target.r; pc.step=target.step;
-    setGame({...game, rolled:null, selectedPair:null, mode:'tailwind', swoopSource:null, swoopTargets:null, message:`Tailwind: opponent may advance or spawn.`});
+    newGame.rolled=null;
+    newGame.selectedPair=null;
+    newGame.swoopSource=null;
+    newGame.swoopTargets=null;
+
+    // Check if tailwind has any actions available
+    if (hasTailwindActions(newGame)) {
+      newGame.mode='tailwind';
+      newGame.message=`Tailwind: ${newGame.players[1-newGame.current].name} click a piece to advance or a base to spawn.`;
+    } else {
+      // Skip tailwind if no actions available
+      newGame.mode='preroll';
+      newGame.message=`${newGame.players[newGame.current].name}: Roll or Bank.`;
+    }
+
+    setGame(newGame);
+  }
+
+  function handleTileClick(r, side, step, occ) {
+    if (game.mode === 'chooseSwoop') {
+      // Click on a piece to select it for swooping
+      if (occ && occ.pi === game.current && occ.pc.active) {
+        chooseSwoopPiece(occ.pc);
+      }
+    } else if (game.mode === 'pickSwoopDest') {
+      // Click on a destination tile for swooping
+      const target = game.swoopTargets.find(t => t.r === r && t.step === step);
+      if (target && game.swoopSource && game.swoopSource.side === side) {
+        finalizeSwoop(game.swoopSource, target);
+      }
+    } else if (game.mode === 'tailwind') {
+      // Tailwind actions
+      const opp = game.players[1 - game.current];
+      const oppSide = (1 - game.current === 0) ? 'L' : 'R';
+
+      if (side === oppSide) {
+        if (occ && opp.pieces.includes(occ.pc)) {
+          // Click on opponent piece to advance it
+          tailwindAdvance(occ.pc);
+        } else if (step === 1 && opp.pieces.length < 5 && !occupied(r, side, 1)) {
+          // Click on empty step 1 to spawn
+          tailwindSpawn(r);
+        }
+      }
+    }
   }
 
   function tailwindAdvance(piece){
-    const opp=game.players[1-game.current];
-    const L=LANES[piece.r].L; const dir=piece.carrying?-1:+1; const ns=piece.step+dir;
-    if(ns>=1 && ns<=L && !occupied(piece.r, piece.side, ns)) piece.step=ns;
-    finishTailwind();
-  }
-  function tailwindSpawn(r){
-    const opp=game.players[1-game.current];
-    const side=(1-game.current===0)?'L':'R';
-    opp.pieces.push({r, side, step:1, carrying:false, active:false});
-    finishTailwind();
-  }
-  function finishTailwind(){
-    setGame({...game, mode:'preroll', message:`${game.players[game.current].name}: Roll or Bank.`});
+    const newGame = {...game};
+    const L=LANES[piece.r].L;
+    const dir=piece.carrying?-1:+1;
+    const ns=piece.step+dir;
+    if(ns>=1 && ns<=L && !occupied(piece.r, piece.side, ns)) {
+      piece.step=ns;
+      afterMovePickup(piece, newGame);
+    }
+    finishTailwind(newGame);
   }
 
-  function resolveDeterrents(pl){
+  function tailwindSpawn(r){
+    const newGame = {...game};
+    const opp=newGame.players[1-newGame.current];
+    const side=(1-newGame.current===0)?'L':'R';
+    opp.pieces.push({r, side, step:1, carrying:false, active:false});
+    finishTailwind(newGame);
+  }
+
+  function finishTailwind(newGame = null){
+    const gameState = newGame || {...game};
+    gameState.mode='preroll';
+    gameState.message=`${gameState.players[gameState.current].name}: Roll or Bank.`;
+    setGame(gameState);
+  }
+
+  // Check if tailwind has any available actions
+  function hasTailwindActions(gameState = game) {
+    const opp = gameState.players[1 - gameState.current];
+    const oppSide = (1 - gameState.current === 0) ? 'L' : 'R';
+
+    // Check if any opponent pieces can advance
+    for (const pc of opp.pieces) {
+      const L = LANES[pc.r].L;
+      const dir = pc.carrying ? -1 : +1;
+      const ns = pc.step + dir;
+      if (ns >= 1 && ns <= L && !occupiedInGame(gameState, pc.r, pc.side, ns)) {
+        return true;
+      }
+    }
+
+    // Check if can spawn (if has < 5 pieces and any step 1 is free)
+    if (opp.pieces.length < 5) {
+      for (let r = 0; r < LANES.length; r++) {
+        if (!occupiedInGame(gameState, r, oppSide, 1)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function occupiedInGame(gameState, r, side, step) {
+    for (const pl of gameState.players) {
+      if (pl.pieces.some(pc => pc.r === r && pc.side === side && pc.step === step)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function resolveDeterrents(pl, newGame){
     pl.pieces=pl.pieces.filter(pc=>{
-      const L=LANES[pc.r].L; const sum=LANES[pc.r].sum; const dets=deterrents(L,sum); const onDet=dets.includes(pc.step);
-      if(onDet){ if(pc.carrying && LANES[pc.r].basket){ const baskets=[...game.baskets]; baskets[pc.r]=true; game.baskets=baskets; } return false; }
+      const L=LANES[pc.r].L;
+      const sum=LANES[pc.r].sum;
+      const dets=deterrents(L,sum);
+      const onDet=dets.includes(pc.step);
+      if(onDet){
+        if(pc.carrying && LANES[pc.r].basket){
+          newGame.baskets[pc.r]=true;
+        }
+        return false;
+      }
       return true;
     });
   }
 
   function bank(){
     if(game.mode!=='preroll') return;
-    const pl=game.players[game.current];
-    const kept=[]; let delivered=0; const baskets=[...game.baskets];
+    const newGame = {...game, baskets: [...game.baskets]};
+    const pl=newGame.players[newGame.current];
+    const kept=[];
+    let delivered=0;
+
     for(const pc of pl.pieces){
-      const L=LANES[pc.r].L; const cps=checkpoints(L);
-      if(pc.step===L && LANES[pc.r].basket && baskets[pc.r] && !pc.carrying){ pc.carrying=true; baskets[pc.r]=false; }
-      if(pc.carrying){ kept.push(pc); if(pc.step===1){ delivered++; } }
-      else{
-        let dest=null; for(const c of cps){ if(c<=pc.step) dest=c; }
-        if(dest!==null){ pc.step=dest; kept.push(pc); }
+      const L=LANES[pc.r].L;
+      const cps=checkpoints(L);
+
+      // Pick up basket at end if available
+      if(pc.step===L && LANES[pc.r].basket && newGame.baskets[pc.r] && !pc.carrying){
+        pc.carrying=true;
+        newGame.baskets[pc.r]=false;
+      }
+
+      if(pc.carrying){
+        if(pc.step===1){
+          delivered++;
+        } else {
+          kept.push(pc);
+        }
+      } else {
+        let dest=null;
+        for(const c of cps){
+          if(c<=pc.step) dest=c;
+        }
+        if(dest!==null){
+          pc.step=dest;
+          kept.push(pc);
+        }
       }
     }
-    pl.pieces=kept.filter(pc=>!(pc.carrying && pc.step===1));
+
+    pl.pieces=kept;
     pl.score += delivered;
-    resolveDeterrents(pl);
+    if(delivered > 0) {
+      showToast(`${pl.name} delivered ${delivered}.`);
+    }
+    resolveDeterrents(pl, newGame);
     pl.pieces.forEach(p=>p.active=false);
-    const newState={...game, baskets, current:1-game.current, mode:'preroll', rolled:null, selectedPair:null, message:`${game.players[1-game.current].name}, roll the dice!`};
-    setGame(newState);
+
+    newGame.current=1-newGame.current;
+    newGame.mode='preroll';
+    newGame.rolled=null;
+    newGame.selectedPair=null;
+    newGame.message=`${newGame.players[newGame.current].name}, roll the dice!`;
+    setGame(newGame);
   }
 
   function bust(){
-    const pl=game.players[game.current];
-    const kept=[]; const baskets=[...game.baskets];
+    const newGame = {...game, baskets: [...game.baskets]};
+    const pl=newGame.players[newGame.current];
+    const kept=[];
+
     for(const pc of pl.pieces){
-      if(!pc.active){ kept.push(pc); continue; }
-      const L=LANES[pc.r].L; const sum=LANES[pc.r].sum; const cps=checkpoints(L); const dets=deterrents(L,sum);
-      const onDet=dets.includes(pc.step); if(onDet){ if(pc.carrying && LANES[pc.r].basket) baskets[pc.r]=true; continue; }
-      if(cps.includes(pc.step)){ kept.push(pc); continue; }
+      if(!pc.active){
+        kept.push(pc);
+        continue;
+      }
+
+      const L=LANES[pc.r].L;
+      const sum=LANES[pc.r].sum;
+      const cps=checkpoints(L);
+      const dets=deterrents(L,sum);
+      const onDet=dets.includes(pc.step);
+
+      if(onDet){
+        if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
+        continue;
+      }
+
+      if(cps.includes(pc.step)){
+        kept.push(pc);
+        continue;
+      }
+
       let dest=null;
-      if(pc.carrying){ for(const c of cps){ if(c>=pc.step){ dest=c; break; } } }
-      else { for(const c of cps){ if(c<=pc.step) dest=c; } }
-      if(dest===null){ if(pc.carrying && LANES[pc.r].basket) baskets[pc.r]=true; }
-      else { pc.step=dest; kept.push(pc); }
+      if(pc.carrying){
+        for(const c of cps){
+          if(c>=pc.step){
+            dest=c;
+            break;
+          }
+        }
+      } else {
+        for(const c of cps){
+          if(c<=pc.step) dest=c;
+        }
+      }
+
+      if(dest===null){
+        if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
+      } else {
+        pc.step=dest;
+        kept.push(pc);
+      }
     }
-    pl.pieces=kept; resolveDeterrents(pl); pl.pieces.forEach(p=>p.active=false);
-    const newState={...game, baskets, current:1-game.current, mode:'preroll', rolled:null, selectedPair:null, message:`${game.players[1-game.current].name}, roll the dice!`};
-    setGame(newState);
+
+    pl.pieces=kept;
+    resolveDeterrents(pl, newGame);
+    pl.pieces.forEach(p=>p.active=false);
+
+    newGame.current=1-newGame.current;
+    newGame.mode='preroll';
+    newGame.rolled=null;
+    newGame.selectedPair=null;
+    newGame.message=`${newGame.players[newGame.current].name}, roll the dice!`;
+    setGame(newGame);
   }
 
   function bankOrBust(){
@@ -214,22 +504,127 @@ export default function App(){
     else if((game.mode==='rolled' || game.mode==='pairChosen') && !anyActionThisRoll()) bust();
   }
 
-  function anyActionThisRoll(){
-    return existsAnyMoveThisRoll() || canSwoopThisRoll();
+  function newGame(){
+    setGame(initialGame());
   }
-  function existsAnyMoveThisRoll(){
-    if(!game.rolled) return false;
-    const pl=game.players[game.current];
-    for(const pr of game.rolled.pairs){ if(canMoveOnSum(pl, pr.sum)) return true; }
-    return false;
+
+  // Save/Load functionality
+  function getState(){
+    return {
+      version: 'v5.2',
+      players: game.players.map(p=>({
+        name: p.name,
+        pieceIcon: p.pieceIcon,
+        activeIcon: p.activeIcon,
+        score: p.score,
+        pieces: p.pieces.map(x=>({...x}))
+      })),
+      current: game.current,
+      mode: game.mode,
+      rolled: game.rolled ? {d:[...game.rolled.d], pairs:[...game.rolled.pairs]} : null,
+      selectedPair: game.selectedPair ? {...game.selectedPair} : null,
+      baskets: [...game.baskets],
+      message: game.message
+    };
   }
-  function canSwoopThisRoll(){
-    if(!(game.mode==='pairChosen' && game.selectedPair)) return false;
-    const pl=game.players[game.current];
-    const actives=pl.pieces.filter(p=>p.active);
-    for(const pc of actives){ if(potentialSwoops(pc).length>0) return true; }
-    return false;
+
+  function setState(state){
+    try{
+      const newGame = {
+        players: [
+          {
+            name: 'Monkeys',
+            pieceIcon: '🐒',
+            activeIcon: '🐵',
+            score: state.players[0].score,
+            pieces: state.players[0].pieces || []
+          },
+          {
+            name: 'Seagulls',
+            pieceIcon: '🕊️',
+            activeIcon: '🦅',
+            score: state.players[1].score,
+            pieces: state.players[1].pieces || []
+          }
+        ],
+        current: (state.current===0 || state.current===1) ? state.current : 0,
+        mode: state.mode || 'preroll',
+        rolled: state.rolled ? {d:[...state.rolled.d], pairs:[...state.rolled.pairs]} : null,
+        selectedPair: state.selectedPair || null,
+        baskets: state.baskets || LANES.map(l=>l.basket),
+        message: state.message || `${state.players[state.current || 0].name}, roll the dice!`
+      };
+      setGame(newGame);
+      showToast('Game loaded successfully!');
+    }catch(e){
+      console.error(e);
+      showToast('Invalid save file.');
+    }
   }
+
+  function saveToFile(){
+    const blob = new Blob([JSON.stringify(getState(), null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href=url;
+    a.download = 'swoop_state.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Game saved to file!');
+  }
+
+  function openLoadModal(){
+    setLoadText('');
+    setShowLoadModal(true);
+  }
+
+  function closeLoadModal(){
+    setShowLoadModal(false);
+  }
+
+  function loadFromText(txt){
+    try{
+      const state = JSON.parse(txt);
+      setState(state);
+      closeLoadModal();
+    }catch(e){
+      console.error(e);
+      showToast('Could not parse JSON.');
+    }
+  }
+
+  function confirmLoad(){
+    const txt = loadText.trim();
+    if(txt) {
+      loadFromText(txt);
+    } else {
+      showToast('Paste JSON or choose a file.');
+    }
+  }
+
+  function handleFileLoad(event){
+    const file = event.target.files && event.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ()=> loadFromText(reader.result);
+    reader.readAsText(file);
+  }
+
+  function quickSave(){
+    localStorage.setItem('SWOOP_STATE_V52', JSON.stringify(getState()));
+    showToast('Saved to browser.');
+  }
+
+  function quickLoad(){
+    const txt = localStorage.getItem('SWOOP_STATE_V52');
+    if(!txt){
+      showToast('No quick save found.');
+      return;
+    }
+    loadFromText(txt);
+  }
+
+
 
   /* Rendering helpers */
   function pieceAt(r, side, step){
@@ -241,111 +636,350 @@ export default function App(){
     return null;
   }
 
-  function renderCell(r, side, step){
-    const occ=pieceAt(r,side,step);
-    const lane=LANES[r];
-    const isCp=checkpoints(lane.L).includes(step);
-    const isDet=deterrents(lane.L,lane.sum).includes(step);
-    let cls="w-8 h-8 border flex items-center justify-center";
-    if(isCp) cls+=" bg-green-200";
-    else if(isDet) cls+=" bg-red-200";
-    else cls+=" bg-gray-200";
-    if(occ){
-      const pl=game.players[occ.pi];
-      const icon=(occ.pi===game.current && occ.pc.active)?pl.activeIcon:pl.pieceIcon;
-      return <td className={cls}>{icon}{occ.pc.carrying?"↩":''}</td>;
+  function getCellClasses(r, side, step) {
+    const lane = LANES[r];
+    const isCp = checkpoints(lane.L).includes(step);
+    const isDet = deterrents(lane.L, lane.sum).includes(step);
+
+    let classes = "w-7 h-7 rounded-md relative flex items-center justify-center text-xs swoop-tile";
+
+    if (isCp) {
+      classes += " swoop-cp"; // checkpoint color
+    } else if (isDet) {
+      classes += " swoop-det"; // deterrent color
     }
-    return <td className={cls}>{step}</td>;
+
+    // Add highlighting for interactive tiles
+    if (shouldHighlightTile(r, side, step)) {
+      classes += " swoop-highlight";
+    }
+
+    return classes;
   }
 
-  function renderRow(r){
-    const lane=LANES[r];
-    const cells=[];
-    cells.push(<td key="labelL" className="px-1 font-bold">{lane.sum}</td>);
-    for(let k=1;k<=lane.L;k++) cells.push(<React.Fragment key={'L'+k}>{renderCell(r,'L',k)}</React.Fragment>);
-    const centerCls="w-8 h-8 border flex items-center justify-center bg-yellow-200";
-    const basket = game.baskets[r] && lane.basket ? '🧺' : '';
-    cells.push(<td key="center" className={centerCls}>{basket}</td>);
-    for(let k=lane.L;k>=1;k--) cells.push(<React.Fragment key={'R'+k}>{renderCell(r,'R',k)}</React.Fragment>);
-    cells.push(<td key="labelR" className="px-1 font-bold">{lane.sum}</td>);
-    return <tr key={lane.sum}>{cells}</tr>;
+  function shouldHighlightTile(r, side, step) {
+    // Highlight eligible pieces for swoop selection
+    if (game.mode === 'chooseSwoop' && game.selectedPair) {
+      const selectedSum = game.selectedPair.sum;
+      const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
+      const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
+      const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
+
+      const pl = game.players[game.current];
+      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step && p.active);
+      return piece && adjacentSums.includes(LANES[r].sum);
+    }
+
+    // Highlight swoop destinations
+    if (game.mode === 'pickSwoopDest' && game.swoopTargets) {
+      return game.swoopTargets.some(t => t.r === r && t.step === step) &&
+             game.swoopSource && game.swoopSource.side === side;
+    }
+
+    // Highlight tailwind options
+    if (game.mode === 'tailwind') {
+      const opp = game.players[1 - game.current];
+      const oppSide = (1 - game.current === 0) ? 'L' : 'R';
+
+      // Highlight opponent pieces that can advance
+      if (side === oppSide) {
+        const piece = opp.pieces.find(p => p.r === r && p.side === side && p.step === step);
+        if (piece) {
+          const L = LANES[r].L;
+          const dir = piece.carrying ? -1 : +1;
+          const ns = piece.step + dir;
+          return ns >= 1 && ns <= L && !occupied(r, side, ns);
+        }
+
+        // Highlight spawn positions (step 1) if opponent has < 5 pieces
+        if (step === 1 && opp.pieces.length < 5 && !occupied(r, side, 1)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function renderGridCell(r, c) {
+    const lane = LANES[r];
+
+    // Left label
+    if (c === 0) {
+      return (
+        <div key={`${r}-${c}`} className="w-7 h-7 flex items-center justify-center text-xs font-bold text-gray-600">
+          {lane.sum}
+        </div>
+      );
+    }
+
+    // Right label
+    if (c === COLS - 1) {
+      return (
+        <div key={`${r}-${c}`} className="w-7 h-7 flex items-center justify-center text-xs font-bold text-gray-600">
+          {lane.sum}
+        </div>
+      );
+    }
+
+    // Center column (baskets)
+    if (c === CENTER_COL) {
+      const centerClasses = "w-7 h-7 swoop-tile swoop-center rounded-md flex items-center justify-center";
+      const basket = game.baskets[r] && lane.basket ? '🧺' : '';
+      return (
+        <div key={`${r}-${c}`} className={centerClasses}>
+          {basket}
+        </div>
+      );
+    }
+
+    // Check if this column position corresponds to a game step
+    let side = null;
+    let step = null;
+
+    // Check left side
+    for (let k = 1; k <= lane.L; k++) {
+      if (colForStep('L', k, lane.L) === c) {
+        side = 'L';
+        step = k;
+        break;
+      }
+    }
+
+    // Check right side if not found on left
+    if (!side) {
+      for (let k = 1; k <= lane.L; k++) {
+        if (colForStep('R', k, lane.L) === c) {
+          side = 'R';
+          step = k;
+          break;
+        }
+      }
+    }
+
+    // If this is a valid game position
+    if (side && step) {
+      const occ = pieceAt(r, side, step);
+      const classes = getCellClasses(r, side, step);
+      const isHighlighted = shouldHighlightTile(r, side, step);
+
+      return (
+        <div
+          key={`${r}-${c}`}
+          className={classes}
+          onClick={isHighlighted ? () => handleTileClick(r, side, step, occ) : undefined}
+        >
+          {/* Step number */}
+          <span className="absolute bottom-0 right-1 text-xs text-gray-500">{step}</span>
+
+          {/* Piece if present */}
+          {occ && (
+            <div className={`swoop-piece ${occ.pi === game.current && occ.pc.active ? 'active' : ''} ${occ.pc.carrying ? 'carry' : ''}`}>
+              <span className="text-lg">
+                {occ.pi === game.current && occ.pc.active
+                  ? game.players[occ.pi].activeIcon
+                  : game.players[occ.pi].pieceIcon}
+              </span>
+              {occ.pc.carrying && (
+                <span className="absolute -bottom-2 left-0 text-xs">↩</span>
+              )}
+              {occ.pi === game.current && occ.pc.active && (
+                <div className="swoop-ring"></div>
+              )}
+            </div>
+          )}
+
+          {/* Show slope indicator for odd-lane swoops */}
+          {game.mode === 'pickSwoopDest' && game.swoopSource &&
+           LANES[game.swoopSource.r].sum % 2 === 1 &&
+           game.swoopSource.step === LANES[game.swoopSource.r].L - 1 &&
+           game.swoopTargets && game.swoopTargets.some(t => t.r === r && t.step === step) && (
+            <div className="absolute top-0 left-0 text-xs text-gray-700">
+              {oddSlope[LANES[game.swoopSource.r].sum] === 1 ? '↑' : '↓'}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Empty cell
+    return <div key={`${r}-${c}`} className="w-7 h-7"></div>;
   }
 
   const pl=game.players[game.current];
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-bold">Swoop</h1>
-      <div className="flex space-x-4">
-        <div>Monkeys: {game.players[0].score}</div>
-        <div>Seagulls: {game.players[1].score}</div>
+    <div className="max-w-6xl mx-auto py-7 px-4 min-h-screen" style={{background: 'var(--bg)'}}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3">
+        <h1 className="text-2xl font-extrabold tracking-wide" style={{color: 'var(--ink)'}}>
+          Swoop — Pass & Play
+        </h1>
+        <div className="flex gap-4">
+          <div className="swoop-badge">
+            <span>🐒 Monkeys</span>
+            <span className="font-bold">{game.players[0].score}</span>
+          </div>
+          <div className="swoop-badge">
+            <span>🕊️ Seagulls</span>
+            <span className="font-bold">{game.players[1].score}</span>
+          </div>
+        </div>
       </div>
-      <div className="overflow-auto">
-        <table className="border-collapse"><tbody>
-          {LANES.map((_,r)=>renderRow(r))}
-        </tbody></table>
+
+      {/* Status */}
+      <div className="mb-2 text-lg font-bold" style={{color: 'var(--ink)'}}>
+        {game.message}
       </div>
-      <div className="flex space-x-2">
-        <button className="px-2 py-1 bg-blue-500 text-white" onClick={roll} disabled={game.mode!=='preroll'}>Roll</button>
-        <button className="px-2 py-1 bg-green-500 text-white" onClick={useMove} disabled={!(game.mode==='pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}>Move</button>
-        <button className="px-2 py-1 bg-purple-500 text-white" onClick={useSwoop} disabled={!canSwoopThisRoll()}>Swoop</button>
-        <button className="px-2 py-1 bg-gray-700 text-white" onClick={bankOrBust}>{game.mode==='preroll'?'Bank':'End Turn'}</button>
+      {/* Controls */}
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <button
+          className={`swoop-button ${game.mode === 'preroll' ? 'primary' : ''}`}
+          onClick={roll}
+          disabled={game.mode !== 'preroll'}
+        >
+          Roll 3 Dice
+        </button>
+        <button
+          className="swoop-button"
+          onClick={useMove}
+          disabled={!(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
+        >
+          Use Pair → Move
+        </button>
+        <button
+          className="swoop-button"
+          onClick={useSwoop}
+          disabled={!canSwoopThisRoll()}
+        >
+          Use Pair → Swoop
+        </button>
+        <button
+          className="swoop-button"
+          onClick={bankOrBust}
+          disabled={(() => {
+            if (game.mode === 'preroll') return false; // Can always bank before rolling
+            if (game.mode === 'rolled' || game.mode === 'pairChosen') {
+              return anyActionThisRoll(); // Disabled if player has legal moves (cannot bank after rolling)
+            }
+            return true; // Disabled in other modes
+          })()}
+        >
+          {(() => {
+            if (game.mode === 'preroll') return 'Bank (Stop)';
+            if (game.mode === 'rolled' || game.mode === 'pairChosen') {
+              return anyActionThisRoll() ? 'Must Use Dice' : 'End Turn (Busted)';
+            }
+            return 'Bank (Stop)';
+          })()}
+        </button>
+        <div className="flex-1"></div>
+        <button className="swoop-button ghost" onClick={newGame}>New Game</button>
+        <button className="swoop-button ghost" onClick={saveToFile}>Save</button>
+        <button className="swoop-button ghost" onClick={openLoadModal}>Load</button>
+        <button className="swoop-button ghost" onClick={quickSave}>Quick Save</button>
+        <button className="swoop-button ghost" onClick={quickLoad}>Quick Load</button>
       </div>
+      {/* Dice and Pairs */}
       {game.rolled && (
-        <div className="flex space-x-2 items-center">
-          {game.rolled.d.map((v,i)=>(<div key={i} className="w-8 h-8 border flex items-center justify-center">{v}</div>))}
-          <div className="flex space-x-1">
-            {game.rolled.pairs.map((p,i)=>(
-              <div key={i} onClick={()=>selectPair(i)} className={(game.selectedPair&&game.selectedPair.i===p.i&&game.selectedPair.j===p.j?'bg-yellow-300 ':'')+"px-1 cursor-pointer"}>{game.rolled.d[p.i]}+{game.rolled.d[p.j]}={p.sum}</div>
+        <div className="mb-4">
+          <div className="flex gap-2 items-center mb-2">
+            {game.rolled.d.map((v, i) => (
+              <div key={i} className="swoop-die">
+                {v}
+              </div>
+            ))}
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            {game.rolled.pairs.map((p, i) => (
+              <div
+                key={i}
+                onClick={() => selectPair(i)}
+                className={`swoop-pair ${
+                  game.selectedPair && game.selectedPair.i === p.i && game.selectedPair.j === p.j
+                    ? 'selected'
+                    : ''
+                }`}
+              >
+                {game.rolled.d[p.i]} + {game.rolled.d[p.j]} = <strong>{p.sum}</strong>
+              </div>
             ))}
           </div>
         </div>
       )}
-      {game.mode==='chooseSwoop' && (
-        <div className="space-x-2">
-          {pl.pieces.filter(p=>p.active).map((pc,idx)=>(
-            <button key={idx} className="px-2 py-1 bg-purple-400" onClick={()=>chooseSwoopPiece(pc)}>
-              {pl.pieceIcon} lane {LANES[pc.r].sum}
-            </button>
-          ))}
+
+      {/* Main Board */}
+      <div className="swoop-board">
+        <div
+          className="grid gap-1 justify-center p-2"
+          style={{
+            gridTemplateColumns: `repeat(${COLS}, 28px)`,
+            gridAutoRows: '28px'
+          }}
+        >
+          {Array.from({ length: ROWS }, (_, r) =>
+            Array.from({ length: COLS }, (_, c) => renderGridCell(r, c))
+          )}
+        </div>
+
+        {/* Legend */}
+        <div className="mt-4 text-sm" style={{color: 'var(--muted)'}}>
+          <strong>Legend:</strong> 🧺 Basket (even sums only); 🟡 Checkpoint; 🟥 Deterrent; 🐒/🐵 Monkeys; 🕊️/🦅 Seagulls.<br/>
+          Steps count from each shore toward the center. Each roll is 3d6: select any <em>pair</em> of dice.
+          Spend that pair to <strong>Move</strong> (+1 on the lane matching the sum; returning pieces move −1) or to <strong>Swoop</strong> (adjacent lane; at odd-lane top apply ↑/↓).<br/>
+          <em>Bank</em> is only allowed before rolling. If a roll leaves no legal pair-sum moves <em>or</em> Swoops, press <strong>End Turn (Busted)</strong>.<br/>
+          Deterrents trigger only on Bank/Bust; checkpoints are safe. <span style={{color: 'var(--danger)'}} className="font-bold">Cells cannot hold more than one piece.</span> Max pieces per player: <strong>5</strong>. Max <em>active pieces this turn</em>: <strong>2</strong>.
+        </div>
+      </div>
+
+
+      {/* Toast Notification */}
+      {toast && (
+        <div className="fixed right-4 bottom-4 bg-gray-800 text-white px-3 py-2 rounded-lg opacity-95 z-50">
+          {toast}
         </div>
       )}
-      {game.mode==='pickSwoopDest' && (
-        <div className="space-x-2">
-          {game.swoopTargets.map((t,idx)=>(
-            <button key={idx} className="px-2 py-1 bg-purple-300" onClick={()=>finalizeSwoop(game.swoopSource,t)}>
-              to lane {LANES[t.r].sum} step {t.step}
-            </button>
-          ))}
+
+      {/* Load Modal */}
+      {showLoadModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-45 flex items-center justify-center p-5 z-50">
+          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-4 border border-gray-300">
+            <h3 className="text-lg font-bold mb-2">Load Game State</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Paste a previously saved JSON state below, or choose a file. Loading replaces the current game.
+            </p>
+            <textarea
+              className="w-full min-h-48 border border-gray-300 rounded-lg p-3 font-mono text-sm"
+              placeholder='{"version":"v5.2","players":[...],...}'
+              value={loadText}
+              onChange={(e) => setLoadText(e.target.value)}
+            />
+            <div className="flex gap-2 justify-end mt-2">
+              <input
+                type="file"
+                accept="application/json"
+                onChange={handleFileLoad}
+                className="text-sm"
+              />
+              <div className="flex-1"></div>
+              <button
+                className="swoop-button ghost"
+                onClick={closeLoadModal}
+              >
+                Cancel
+              </button>
+              <button
+                className="swoop-button primary"
+                onClick={confirmLoad}
+              >
+                Load
+              </button>
+            </div>
+          </div>
         </div>
       )}
-      {game.mode==='tailwind' && (
-        <TailwindOptions game={game} finish={finishTailwind} advance={tailwindAdvance} spawn={tailwindSpawn}/>
-      )}
-      <div className="mt-2">{game.message}</div>
     </div>
   );
 }
 
-function TailwindOptions({game, finish, advance, spawn}){
-  const opp=game.players[1-game.current];
-  const side=(1-game.current===0?'L':'R');
-  const options=[];
-  if(opp.pieces.length>0){
-    opp.pieces.forEach((pc,idx)=>{
-      options.push(<button key={'m'+idx} className="px-2 py-1 bg-orange-300" onClick={()=>advance(pc)}>Move {LANES[pc.r].sum}</button>);
-    });
-  }
-  if(opp.pieces.length<5){
-    for(let r=0;r<LANES.length;r++){
-      if(!occupiedTailwind(game,r,side))
-        options.push(<button key={'s'+r} className="px-2 py-1 bg-orange-200" onClick={()=>spawn(r)}>Spawn {LANES[r].sum}</button>);
-    }
-  }
-  if(options.length===0) return <div>No tailwind action available. <button className="px-2 py-1 bg-orange-300" onClick={finish}>Continue</button></div>;
-  return <div className="space-x-2">{options}</div>;
-}
-function occupiedTailwind(game,r,side){
-  for(const pl of game.players){ if(pl.pieces.some(pc=>pc.r===r && pc.side===side && pc.step===1)) return true; }
-  return false;
-}
+
