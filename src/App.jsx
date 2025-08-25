@@ -641,7 +641,7 @@ export default function App(){
     const isCp = checkpoints(lane.L).includes(step);
     const isDet = deterrents(lane.L, lane.sum).includes(step);
 
-    let classes = "w-7 h-7 rounded-md relative flex items-center justify-center text-xs swoop-tile";
+    let classes = "mobile-cell swoop-tile";
 
     if (isCp) {
       classes += " swoop-cp"; // checkpoint color
@@ -707,7 +707,7 @@ export default function App(){
     // Left label
     if (c === 0) {
       return (
-        <div key={`${r}-${c}`} className="w-7 h-7 flex items-center justify-center text-xs font-bold text-gray-600">
+        <div key={`${r}-${c}`} className="mobile-cell mobile-label">
           {lane.sum}
         </div>
       );
@@ -716,7 +716,7 @@ export default function App(){
     // Right label
     if (c === COLS - 1) {
       return (
-        <div key={`${r}-${c}`} className="w-7 h-7 flex items-center justify-center text-xs font-bold text-gray-600">
+        <div key={`${r}-${c}`} className="mobile-cell mobile-label">
           {lane.sum}
         </div>
       );
@@ -724,7 +724,7 @@ export default function App(){
 
     // Center column (baskets)
     if (c === CENTER_COL) {
-      const centerClasses = "w-7 h-7 swoop-tile swoop-center rounded-md flex items-center justify-center";
+      const centerClasses = "mobile-cell swoop-tile swoop-center";
       const basket = game.baskets[r] && lane.basket ? '🧺' : '';
       return (
         <div key={`${r}-${c}`} className={centerClasses}>
@@ -770,18 +770,18 @@ export default function App(){
           onClick={isHighlighted ? () => handleTileClick(r, side, step, occ) : undefined}
         >
           {/* Step number */}
-          <span className="absolute bottom-0 right-1 text-xs text-gray-500">{step}</span>
+          <span className="mobile-step-number">{step}</span>
 
           {/* Piece if present */}
           {occ && (
             <div className={`swoop-piece ${occ.pi === game.current && occ.pc.active ? 'active' : ''} ${occ.pc.carrying ? 'carry' : ''}`}>
-              <span className="text-lg">
+              <span>
                 {occ.pi === game.current && occ.pc.active
                   ? game.players[occ.pi].activeIcon
                   : game.players[occ.pi].pieceIcon}
               </span>
               {occ.pc.carrying && (
-                <span className="absolute -bottom-2 left-0 text-xs">↩</span>
+                <span className="mobile-carry-indicator">↩</span>
               )}
               {occ.pi === game.current && occ.pc.active && (
                 <div className="swoop-ring"></div>
@@ -803,177 +803,193 @@ export default function App(){
     }
 
     // Empty cell
-    return <div key={`${r}-${c}`} className="w-7 h-7"></div>;
+    return <div key={`${r}-${c}`} className="mobile-cell"></div>;
   }
 
   const pl=game.players[game.current];
 
   return (
-    <div className="max-w-6xl mx-auto py-7 px-4 min-h-screen" style={{background: 'var(--bg)'}}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <h1 className="text-2xl font-extrabold tracking-wide" style={{color: 'var(--ink)'}}>
-          Swoop — Pass & Play
-        </h1>
-        <div className="flex gap-4">
-          <div className="swoop-badge">
-            <span>🐒 Monkeys</span>
-            <span className="font-bold">{game.players[0].score}</span>
+    <div className="mobile-game-container" style={{background: 'var(--bg)'}}>
+      {/* Mobile Header - Compact */}
+      <div className="mobile-header">
+        <div className="mobile-title">
+          <h1>Swoop</h1>
+          <div className="mobile-scores">
+            <div className={`mobile-score ${game.current === 0 ? 'active-player' : ''}`}>
+              <span>🐒</span>
+              <span>{game.players[0].score}</span>
+            </div>
+            <div className={`mobile-score ${game.current === 1 ? 'active-player' : ''}`}>
+              <span>🕊️</span>
+              <span>{game.players[1].score}</span>
+            </div>
           </div>
-          <div className="swoop-badge">
-            <span>🕊️ Seagulls</span>
-            <span className="font-bold">{game.players[1].score}</span>
-          </div>
+        </div>
+
+        {/* Status Message - Mobile */}
+        <div className="mobile-status">
+          {game.message}
         </div>
       </div>
 
-      {/* Status */}
-      <div className="mb-2 text-lg font-bold" style={{color: 'var(--ink)'}}>
-        {game.message}
-      </div>
-      {/* Controls */}
-      <div className="flex gap-2 mb-3 flex-wrap">
-        <button
-          className={`swoop-button ${game.mode === 'preroll' ? 'primary' : ''}`}
-          onClick={roll}
-          disabled={game.mode !== 'preroll'}
-        >
-          Roll 3 Dice
-        </button>
-        <button
-          className="swoop-button"
-          onClick={useMove}
-          disabled={!(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
-        >
-          Use Pair → Move
-        </button>
-        <button
-          className="swoop-button"
-          onClick={useSwoop}
-          disabled={!canSwoopThisRoll()}
-        >
-          Use Pair → Swoop
-        </button>
-        <button
-          className="swoop-button"
-          onClick={bankOrBust}
-          disabled={(() => {
-            if (game.mode === 'preroll') return false; // Can always bank before rolling
-            if (game.mode === 'rolled' || game.mode === 'pairChosen') {
-              return anyActionThisRoll(); // Disabled if player has legal moves (cannot bank after rolling)
-            }
-            return true; // Disabled in other modes
-          })()}
-        >
-          {(() => {
-            if (game.mode === 'preroll') return 'Bank (Stop)';
-            if (game.mode === 'rolled' || game.mode === 'pairChosen') {
-              return anyActionThisRoll() ? 'Must Use Dice' : 'End Turn (Busted)';
-            }
-            return 'Bank (Stop)';
-          })()}
-        </button>
-        <div className="flex-1"></div>
-        <button className="swoop-button ghost" onClick={newGame}>New Game</button>
-        <button className="swoop-button ghost" onClick={saveToFile}>Save</button>
-        <button className="swoop-button ghost" onClick={openLoadModal}>Load</button>
-        <button className="swoop-button ghost" onClick={quickSave}>Quick Save</button>
-        <button className="swoop-button ghost" onClick={quickLoad}>Quick Load</button>
-      </div>
-      {/* Dice and Pairs */}
-      {game.rolled && (
-        <div className="mb-4">
-          <div className="flex gap-2 items-center mb-2">
-            {game.rolled.d.map((v, i) => (
-              <div key={i} className="swoop-die">
-                {v}
-              </div>
-            ))}
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {game.rolled.pairs.map((p, i) => (
-              <div
-                key={i}
-                onClick={() => selectPair(i)}
-                className={`swoop-pair ${
-                  game.selectedPair && game.selectedPair.i === p.i && game.selectedPair.j === p.j
-                    ? 'selected'
-                    : ''
-                }`}
-              >
-                {game.rolled.d[p.i]} + {game.rolled.d[p.j]} = <strong>{p.sum}</strong>
-              </div>
-            ))}
+      {/* Main Mobile Layout - Horizontal Split */}
+      <div className="mobile-main-layout">
+        {/* Left Side - Game Board */}
+        <div className="mobile-board-container">
+          <div className="swoop-board mobile-board">
+            {/* Game Board Grid */}
+            <div
+              className="mobile-grid"
+              style={{
+                gridTemplateColumns: `repeat(${COLS}, 1fr)`,
+                gridAutoRows: '1fr'
+              }}
+            >
+              {Array.from({ length: ROWS }, (_, r) =>
+                Array.from({ length: COLS }, (_, c) => renderGridCell(r, c))
+              )}
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Main Board */}
-      <div className="swoop-board">
-        <div
-          className="grid gap-1 justify-center p-2"
-          style={{
-            gridTemplateColumns: `repeat(${COLS}, 28px)`,
-            gridAutoRows: '28px'
-          }}
-        >
-          {Array.from({ length: ROWS }, (_, r) =>
-            Array.from({ length: COLS }, (_, c) => renderGridCell(r, c))
+        {/* Right Side - Controls and Info */}
+        <div className="mobile-controls-container">
+          {/* Primary Action Buttons */}
+          <div className="mobile-primary-controls">
+            <button
+              className={`mobile-button primary ${game.mode === 'preroll' ? 'active' : ''}`}
+              onClick={roll}
+              disabled={game.mode !== 'preroll'}
+            >
+              🎲 Roll
+            </button>
+            <button
+              className="mobile-button"
+              onClick={useMove}
+              disabled={!(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
+            >
+              ➡️ Move
+            </button>
+            <button
+              className="mobile-button"
+              onClick={useSwoop}
+              disabled={!canSwoopThisRoll()}
+            >
+              🔄 Swoop
+            </button>
+            <button
+              className="mobile-button"
+              onClick={bankOrBust}
+              disabled={(() => {
+                if (game.mode === 'preroll') return false;
+                if (game.mode === 'rolled' || game.mode === 'pairChosen') {
+                  return anyActionThisRoll();
+                }
+                return true;
+              })()}
+            >
+              {(() => {
+                if (game.mode === 'preroll') return '🏦 Bank';
+                if (game.mode === 'rolled' || game.mode === 'pairChosen') {
+                  return anyActionThisRoll() ? '❌ Must Use' : '💥 Bust';
+                }
+                return '🏦 Bank';
+              })()}
+            </button>
+          </div>
+
+          {/* Dice and Pairs - Mobile Layout */}
+          {game.rolled && (
+            <div className="mobile-dice-section">
+              <div className="mobile-dice-container">
+                {game.rolled.d.map((v, i) => (
+                  <div key={i} className="mobile-die">
+                    {v}
+                  </div>
+                ))}
+              </div>
+              <div className="mobile-pairs-container">
+                {game.rolled.pairs.map((p, i) => (
+                  <div
+                    key={i}
+                    onClick={() => selectPair(i)}
+                    className={`mobile-pair ${
+                      game.selectedPair && game.selectedPair.i === p.i && game.selectedPair.j === p.j
+                        ? 'selected'
+                        : ''
+                    }`}
+                  >
+                    <div className="pair-sum">{p.sum}</div>
+                    <div className="pair-calc">{game.rolled.d[p.i]}+{game.rolled.d[p.j]}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
-        </div>
 
-        {/* Legend */}
-        <div className="mt-4 text-sm" style={{color: 'var(--muted)'}}>
-          <strong>Legend:</strong> 🧺 Basket (even sums only); 🟡 Checkpoint; 🟥 Deterrent; 🐒/🐵 Monkeys; 🕊️/🦅 Seagulls.<br/>
-          Steps count from each shore toward the center. Each roll is 3d6: select any <em>pair</em> of dice.
-          Spend that pair to <strong>Move</strong> (+1 on the lane matching the sum; returning pieces move −1) or to <strong>Swoop</strong> (adjacent lane; at odd-lane top apply ↑/↓).<br/>
-          <em>Bank</em> is only allowed before rolling. If a roll leaves no legal pair-sum moves <em>or</em> Swoops, press <strong>End Turn (Busted)</strong>.<br/>
-          Deterrents trigger only on Bank/Bust; checkpoints are safe. <span style={{color: 'var(--danger)'}} className="font-bold">Cells cannot hold more than one piece.</span> Max pieces per player: <strong>5</strong>. Max <em>active pieces this turn</em>: <strong>2</strong>.
+          {/* Mobile Legend */}
+          <div className="mobile-legend">
+            <div className="legend-title">Quick Guide:</div>
+            <div className="legend-items">
+              <div>🧺 Basket • 🟡 Safe • 🟥 Danger</div>
+              <div>🐒🐵 Monkeys • 🕊️🦅 Seagulls</div>
+              <div>Roll 3 dice → Pick pair → Move/Swoop</div>
+            </div>
+          </div>
+
+          {/* Secondary Controls */}
+          <div className="mobile-secondary-controls">
+            <button className="mobile-button-small" onClick={newGame}>🔄 New</button>
+            <button className="mobile-button-small" onClick={saveToFile}>💾 Save</button>
+            <button className="mobile-button-small" onClick={openLoadModal}>📁 Load</button>
+            <button className="mobile-button-small" onClick={quickSave}>⚡ Quick Save</button>
+            <button className="mobile-button-small" onClick={quickLoad}>⚡ Quick Load</button>
+          </div>
         </div>
       </div>
 
-
-      {/* Toast Notification */}
+      {/* Mobile Toast Notification */}
       {toast && (
-        <div className="fixed right-4 bottom-4 bg-gray-800 text-white px-3 py-2 rounded-lg opacity-95 z-50">
+        <div className="mobile-toast">
           {toast}
         </div>
       )}
 
-      {/* Load Modal */}
+      {/* Mobile Load Modal */}
       {showLoadModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-45 flex items-center justify-center p-5 z-50">
-          <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full p-4 border border-gray-300">
-            <h3 className="text-lg font-bold mb-2">Load Game State</h3>
-            <p className="text-sm text-gray-600 mb-4">
-              Paste a previously saved JSON state below, or choose a file. Loading replaces the current game.
+        <div className="mobile-modal-overlay">
+          <div className="mobile-modal">
+            <h3 className="mobile-modal-title">Load Game</h3>
+            <p className="mobile-modal-text">
+              Paste saved JSON or choose file:
             </p>
             <textarea
-              className="w-full min-h-48 border border-gray-300 rounded-lg p-3 font-mono text-sm"
-              placeholder='{"version":"v5.2","players":[...],...}'
+              className="mobile-modal-textarea"
+              placeholder='{"version":"v5.2",...}'
               value={loadText}
               onChange={(e) => setLoadText(e.target.value)}
             />
-            <div className="flex gap-2 justify-end mt-2">
+            <div className="mobile-modal-controls">
               <input
                 type="file"
                 accept="application/json"
                 onChange={handleFileLoad}
-                className="text-sm"
+                className="mobile-file-input"
               />
-              <div className="flex-1"></div>
-              <button
-                className="swoop-button ghost"
-                onClick={closeLoadModal}
-              >
-                Cancel
-              </button>
-              <button
-                className="swoop-button primary"
-                onClick={confirmLoad}
-              >
-                Load
-              </button>
+              <div className="mobile-modal-buttons">
+                <button
+                  className="mobile-button-small"
+                  onClick={closeLoadModal}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="mobile-button primary"
+                  onClick={confirmLoad}
+                >
+                  Load
+                </button>
+              </div>
             </div>
           </div>
         </div>

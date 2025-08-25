@@ -2,10 +2,65 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Swoop</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Swoop" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#2563eb" />
+    <title>Swoop - Mobile Game</title>
+    <style>
+      /* Prevent iOS bounce scrolling and zoom */
+      html, body {
+        height: 100%;
+        overflow: hidden;
+        position: fixed;
+        width: 100%;
+        -webkit-overflow-scrolling: touch;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      /* Force landscape orientation hint */
+      @media screen and (orientation: portrait) {
+        .orientation-hint {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background: #1f2937;
+          color: white;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          z-index: 9999;
+          font-family: system-ui, -apple-system, sans-serif;
+          text-align: center;
+          padding: 20px;
+        }
+        .orientation-hint .rotate-icon {
+          font-size: 4rem;
+          margin-bottom: 1rem;
+          animation: rotate 2s infinite ease-in-out;
+        }
+        @keyframes rotate {
+          0%, 100% { transform: rotate(0deg); }
+          50% { transform: rotate(90deg); }
+        }
+      }
+    </style>
   </head>
   <body>
+    <!-- Orientation hint for portrait mode -->
+    <div class="orientation-hint">
+      <div class="rotate-icon">📱</div>
+      <h2>Please rotate your device</h2>
+      <p>Swoop is designed for landscape mode</p>
+    </div>
+
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "vite",
+    "dev:mobile": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
     "test": "echo 'No tests defined' && exit 0"
