@@ -34,6 +34,12 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .piece.active{font-size:22px}
 .piece.carry::after{content:'🧺'; position:absolute; right:-6px; top:-10px; font-size:14px;}
 .ring{position:absolute;inset:-2px;border-radius:8px;border:2px solid var(--accent);pointer-events:none}
+/* Merged final step styles */
+.center.merged-final{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+.piece.basket{position:absolute;top:2px;right:2px;font-size:14px;z-index:10}
+.piece.left-piece{position:relative;margin-right:4px}
+.piece.right-piece{position:relative;margin-left:4px}
+.center.merged-final .piece{display:inline-block;margin:0 1px}
 .dir{position:absolute; bottom:-10px; left:2px; font-size:12px; color:#374151}
 .dice{display:flex;gap:8px;align-items:center}
 .die{width:34px;height:34px;border-radius:8px;background:#111827;color:#fff;display:grid;place-items:center;font-weight:800}
@@ -149,13 +155,17 @@ for(let r=0;r<rows;r++){
   cells.push(row);
 }
 function colForStep(side, step, L){
+  // Final step (step L) is always at the center column for both sides
+  if(step === L) return centerCol;
   if(side==='L'){ const rel=Math.round((leftSpan-1)*(step-1)/(L-1)); return leftStartCol+rel; }
   const rel=Math.round((rightSpan-1)*(step-1)/(L-1)); return rightEndCol-rel;
 }
 for(let r=0;r<rows;r++){
   const L=lanes[r].L, sum=lanes[r].sum;
   const cps=checkpoints(L), dets=deterrents(L,sum);
-  for(let k=1;k<=L;k++){
+
+  // Set up steps 1 to L-1 for both sides
+  for(let k=1;k<L;k++){
     const cL=colForStep('L',k,L), cR=colForStep('R',k,L);
     const elL=cells[r][cL]; elL.classList.add('tile'); elL.dataset.r=r; elL.dataset.side='L'; elL.dataset.step=k;
     const elR=cells[r][cR]; elR.classList.add('tile'); elR.dataset.r=r; elR.dataset.side='R'; elR.dataset.step=k;
@@ -164,11 +174,33 @@ for(let r=0;r<rows;r++){
     const sL=document.createElement('small'); sL.textContent=k; elL.appendChild(sL);
     const sR=document.createElement('small'); sR.textContent=k; elR.appendChild(sR);
   }
-  const center=cells[r][centerCol]; center.classList.add('tile','center'); if(lanes[r].basket){ const b=document.createElement('div'); b.className='piece'; b.textContent='🧺'; center.appendChild(b); }
+
+  // Set up the merged final step at center column
+  const center=cells[r][centerCol];
+  center.classList.add('tile','center','merged-final');
+  center.dataset.r=r;
+  center.dataset.step=L;
+  if(cps.includes(L)){ center.classList.add('cp'); }
+  if(dets.includes(L)){ center.classList.add('det'); }
+  const stepNum=document.createElement('small'); stepNum.textContent=L; center.appendChild(stepNum);
+  if(lanes[r].basket){ const b=document.createElement('div'); b.className='piece basket'; b.textContent='🧺'; center.appendChild(b); }
 }
 
 /* ---------- Helpers & state ---------- */
 function occupied(r, side, step){
+  // For the final step (merged step), allow both sides to occupy it
+  const L = lanes[r].L;
+  if (step === L) {
+    // Check if the same side already has a piece on the final step
+    for(let pi=0; pi<players.length; pi++){
+      for(const pc of players[pi].pieces){
+        if(pc.r===r && pc.side===side && pc.step===step) return true;
+      }
+    }
+    return false;
+  }
+
+  // For non-final steps, use original logic
   for(let pi=0; pi<players.length; pi++){
     for(const pc of players[pi].pieces){
       if(pc.r===r && pc.side===side && pc.step===step) return true;
@@ -211,6 +243,8 @@ function toast(m){ toastEl.textContent=m; toastEl.style.display='block'; setTime
 function locate(r, side, step){
   if(step===999) return cells[r][centerCol];
   const L=lanes[r].L; if(step<1 || step> L) return null;
+  // Final step is always at center column regardless of side
+  if(step === L) return cells[r][centerCol];
   const c=colForStep(side,step,L); return cells[r][c];
 }
 
@@ -264,6 +298,7 @@ function canSwoopThisRoll(){
   }
   return false;
 }
+function anyMandatoryActionThisRoll(){ return existsAnyMoveThisRoll(); }
 function anyActionThisRoll(){ return existsAnyMoveThisRoll() || canSwoopThisRoll(); }
 
 function render(){
@@ -274,9 +309,18 @@ function render(){
   const canSwoop = canSwoopThisRoll();
   useSwoopBtn.disabled = !canSwoop;
   if(mode==='rolled' || mode==='pairChosen'){
+    const mandatory = anyMandatoryActionThisRoll();
     const any = anyActionThisRoll();
-    bankBtn.textContent = any ? 'Bank (Stop)' : 'End Turn (Busted)';
-    bankBtn.disabled = any;
+    if(mandatory) {
+      bankBtn.textContent = 'Must Move';
+      bankBtn.disabled = true;
+    } else if(any) {
+      bankBtn.textContent = 'Bank (Stop)';
+      bankBtn.disabled = false;
+    } else {
+      bankBtn.textContent = 'End Turn (Busted)';
+      bankBtn.disabled = false;
+    }
   }else{ bankBtn.textContent='Bank (Stop)'; bankBtn.disabled=!(mode==='preroll'); }
 }
 
@@ -307,7 +351,7 @@ function roll3(){
   selectedPair=null; mode='rolled'; renderDiceAndPairs();
   if(!existsAnyMoveThisRoll()){
     render();
-    statusEl.textContent=`${players[current].name} rolled ${d.join(' ')} — select a pair to Swoop or End Turn (Busted).`;
+    statusEl.textContent=`${players[current].name} rolled ${d.join(' ')} — select a pair to Swoop (optional) or End Turn (Busted).`;
   } else {
     render();
     statusEl.textContent=`${players[current].name}: select a pair, then Move or Swoop.`;
@@ -315,12 +359,11 @@ function roll3(){
 }
 function updateStatusAfterSelect(){
   if(mode!=='pairChosen') return;
-  const any = anyActionThisRoll();
   const canMove = canMoveOnSum(players[current], selectedPair.sum);
   const canSwoop = canSwoopThisRoll();
   if(canMove && canSwoop) statusEl.textContent=`${players[current].name}: Move or Swoop.`;
   else if(canMove) statusEl.textContent=`${players[current].name}: Move.`;
-  else if(canSwoop) statusEl.textContent=`${players[current].name}: Swoop or End Turn (Busted).`;
+  else if(canSwoop) statusEl.textContent=`${players[current].name}: Swoop (optional) or Bank/Bust.`;
   else statusEl.textContent=`${players[current].name}: End Turn (Busted).`;
 }
 
@@ -336,9 +379,11 @@ function canMoveOnSum(pl, sum){
   const pc = pieceOnLane(pl, r);
   const act = activeCount(pl);
   if(pc){
+    // For existing pieces, check if they can be activated or are already active
+    if(!pc.active && act>=2) return false; // Can't activate if already at max active pieces
     const L=lanes[r].L; const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
     if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
-      return true;  // existing piece moves regardless of active-lane count
+      return true;  // existing piece can move if it can be activated or is already active
     }
     return false;
   } else {
@@ -389,10 +434,20 @@ function usePairForMove(){
 function potentialSwoops(pc){
   const targets=[]; const r=pc.r; const L=lanes[r].L; const sum=lanes[r].sum;
   const atOddTop = (sum%2===1) && (pc.step===L-1);
+  const atTopStep = pc.step===L;
+
   for(const dr of [-1,+1]){
     const r2=r+dr; if(r2<0||r2>=rows) continue;
     let step2 = pc.step;
-    if(atOddTop){ step2 = Math.min(lanes[r2].L, Math.max(1, pc.step + oddSlope[sum])); }
+
+    if(atOddTop){
+      // Special slope adjustment for pieces at L-1 on odd lanes
+      step2 = Math.min(lanes[r2].L, Math.max(1, pc.step + oddSlope[sum]));
+    } else if(atTopStep){
+      // Pieces at the top step can swoop to the top step of adjacent lanes
+      step2 = lanes[r2].L;
+    }
+
     step2 = Math.min(lanes[r2].L, step2);
     if(!occupied(r2, pc.side, step2)) targets.push({r:r2, step:step2});
   }

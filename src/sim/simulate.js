@@ -90,6 +90,17 @@ function initialGame() {
 }
 
 function occupied(game, r, side, step) {
+  // For the final step (merged step), allow both sides to occupy it
+  const L = LANES[r].L;
+  if (step === L) {
+    // Check if the same side already has a piece on the final step
+    for (const pl of game.players) {
+      if (pl.pieces.some((pc) => pc.r === r && pc.side === side && pc.step === step)) return true;
+    }
+    return false;
+  }
+
+  // For non-final steps, use original logic
   for (const pl of game.players) {
     if (pl.pieces.some((pc) => pc.r === r && pc.side === side && pc.step === step)) return true;
   }
@@ -142,6 +153,8 @@ function canMoveOnSum(game, pl, sum) {
   if (r < 0) return false;
   const pc = pieceOnLane(pl, r);
   if (pc) {
+    // For existing pieces, check if they can be activated or are already active
+    if (!pc.active && activeCount(pl) >= 2) return false; // Can't activate if already at max active pieces
     const L = LANES[pc.r].L;
     const dir = pc.carrying ? -1 : +1;
     const ns = pc.step + dir;
@@ -189,13 +202,21 @@ function potentialSwoops(game, pc) {
   const L = LANES[r].L;
   const sum = LANES[r].sum;
   const atOddTop = sum % 2 === 1 && pc.step === L - 1;
+  const atTopStep = pc.step === L;
+
   for (const dr of [-1, +1]) {
     const r2 = r + dr;
     if (r2 < 0 || r2 >= LANES.length) continue;
     let step2 = pc.step;
+
     if (atOddTop) {
+      // Special slope adjustment for pieces at L-1 on odd lanes
       step2 = Math.min(LANES[r2].L, Math.max(1, pc.step + oddSlope[sum]));
+    } else if (atTopStep) {
+      // Pieces at the top step can swoop to the top step of adjacent lanes
+      step2 = LANES[r2].L;
     }
+
     step2 = Math.min(LANES[r2].L, step2);
     if (!occupied(game, r2, pc.side, step2)) targets.push({ r: r2, step: step2 });
   }
@@ -215,6 +236,10 @@ function canSwoopWithSum(game, pl, sum) {
     if (potentialSwoops(game, pc).length > 0) return true;
   }
   return false;
+}
+
+function anyMandatoryActionForSum(game, pl, sum) {
+  return canMoveOnSum(game, pl, sum);
 }
 
 function anyActionForSum(game, pl, sum) {

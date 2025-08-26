@@ -53,6 +53,8 @@ function testGameLogic() {
   const RIGHT_SPAN = RIGHT_END_COL - CENTER_COL - 1;
 
   function colForStep(side, step, L) {
+    // Final step (step L) is always at the center column for both sides
+    if (step === L) return CENTER_COL;
     if (side === 'L') {
       const rel = Math.round((LEFT_SPAN - 1) * (step - 1) / (L - 1));
       return LEFT_START_COL + rel;

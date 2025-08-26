@@ -28,6 +28,11 @@ const LEFT_SPAN = CENTER_COL - LEFT_START_COL - 1;
 const RIGHT_SPAN = RIGHT_END_COL - CENTER_COL - 1;
 
 function colForStep(side, step, L) {
+  // Final step (step L) is always at the center column for both sides
+  if (step === L) {
+    return CENTER_COL;
+  }
+
   if (side === 'L') {
     const rel = Math.round((LEFT_SPAN - 1) * (step - 1) / (L - 1));
     return LEFT_START_COL + rel;
@@ -89,6 +94,10 @@ export default function App(){
     return false;
   }
 
+  function anyMandatoryActionThisRoll(){
+    return existsAnyMoveThisRoll();
+  }
+
   function anyActionThisRoll(){
     // For rolled mode (no pair selected yet), check if any pair can move
     if(game.mode === 'rolled') {
@@ -99,6 +108,17 @@ export default function App(){
   }
 
   function occupied(r,side,step){
+    // For the final step (merged step), allow both sides to occupy it
+    const L = LANES[r].L;
+    if (step === L) {
+      // Check if the same side already has a piece on the final step
+      for(const pl of game.players){
+        if(pl.pieces.some(pc=>pc.r===r && pc.side===side && pc.step===step)) return true;
+      }
+      return false;
+    }
+
+    // For non-final steps, use original logic
     for(const pl of game.players){
       if(pl.pieces.some(pc=>pc.r===r && pc.side===side && pc.step===step)) return true;
     }
@@ -124,7 +144,7 @@ export default function App(){
     }
 
     if(!hasAnyMove){
-      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — select a pair to Swoop or End Turn (Busted).`;
+      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — select a pair to Swoop (optional) or End Turn (Busted).`;
     } else {
       newGame.message = `${game.players[game.current].name}: select a pair, then Move or Swoop.`;
     }
@@ -145,7 +165,7 @@ export default function App(){
     } else if(canMove) {
       newGame.message = `${game.players[game.current].name}: Move.`;
     } else if(canSwoop) {
-      newGame.message = `${game.players[game.current].name}: Swoop or End Turn (Busted).`;
+      newGame.message = `${game.players[game.current].name}: Swoop (optional) or Bank/Bust.`;
     } else {
       newGame.message = `${game.players[game.current].name}: End Turn (Busted).`;
     }
@@ -157,6 +177,8 @@ export default function App(){
     const r=LANES.findIndex(x=>x.sum===sum); if(r<0) return false;
     const pc = pieceOnLane(pl,r);
     if(pc){
+      // For existing pieces, check if they can be activated or are already active
+      if(!pc.active && activeCount(pl)>=2) return false; // Can't activate if already at max active pieces
       const L=LANES[r].L; const dir = pc.carrying?-1:+1; const ns=pc.step+dir;
       return ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns);
     } else {
@@ -223,10 +245,20 @@ export default function App(){
   function potentialSwoops(pc){
     const targets=[]; const r=pc.r; const L=LANES[r].L; const sum=LANES[r].sum;
     const atOddTop=(sum%2===1)&&(pc.step===L-1);
+    const atTopStep=pc.step===L;
+
     for(const dr of [-1,+1]){
       const r2=r+dr; if(r2<0||r2>=LANES.length) continue;
       let step2=pc.step;
-      if(atOddTop){ step2=Math.min(LANES[r2].L, Math.max(1, pc.step+oddSlope[sum])); }
+
+      if(atOddTop){
+        // Special slope adjustment for pieces at L-1 on odd lanes
+        step2=Math.min(LANES[r2].L, Math.max(1, pc.step+oddSlope[sum]));
+      } else if(atTopStep){
+        // Pieces at the top step can swoop to the top step of adjacent lanes
+        step2=LANES[r2].L;
+      }
+
       step2=Math.min(LANES[r2].L, step2);
       if(!occupied(r2, pc.side, step2)) targets.push({r:r2, step:step2});
     }
@@ -501,7 +533,18 @@ export default function App(){
 
   function bankOrBust(){
     if(game.mode==='preroll') bank();
-    else if((game.mode==='rolled' || game.mode==='pairChosen') && !anyActionThisRoll()) bust();
+    else if(game.mode==='rolled' || game.mode==='pairChosen') {
+      if(anyMandatoryActionThisRoll()) {
+        // Should not happen as button should be disabled, but just in case
+        return;
+      } else if(anyActionThisRoll()) {
+        // Has optional actions (swoop), but player chooses to bank
+        bank();
+      } else {
+        // No actions available, must bust
+        bust();
+      }
+    }
   }
 
   function newGame(){
@@ -722,13 +765,80 @@ export default function App(){
       );
     }
 
-    // Center column (baskets)
+    // Center column (merged final step)
     if (c === CENTER_COL) {
-      const centerClasses = "mobile-cell swoop-tile swoop-center";
-      const basket = game.baskets[r] && lane.basket ? '🧺' : '';
+      const L = lane.L;
+      const step = L; // This is the final step
+
+      // Find pieces on the final step from both sides
+      const leftPiece = pieceAt(r, 'L', step);
+      const rightPiece = pieceAt(r, 'R', step);
+
+      // Determine classes for the merged final step
+      const cps = checkpoints(L);
+      const dets = deterrents(L, lane.sum);
+      const isCp = cps.includes(step);
+      const isDet = dets.includes(step);
+
+      let classes = "mobile-cell swoop-tile swoop-center";
+      if (isCp) classes += " swoop-cp";
+      if (isDet) classes += " swoop-det";
+
+      // Check if either side should be highlighted
+      const leftHighlighted = shouldHighlightTile(r, 'L', step);
+      const rightHighlighted = shouldHighlightTile(r, 'R', step);
+      if (leftHighlighted || rightHighlighted) {
+        classes += " swoop-highlight";
+      }
+
       return (
-        <div key={`${r}-${c}`} className={centerClasses}>
-          {basket}
+        <div
+          key={`${r}-${c}`}
+          className={classes}
+          onClick={leftHighlighted ? () => handleTileClick(r, 'L', step, leftPiece) :
+                   rightHighlighted ? () => handleTileClick(r, 'R', step, rightPiece) : undefined}
+        >
+          {/* Step number */}
+          <span className="mobile-step-number">{step}</span>
+
+          {/* Basket if present */}
+          {game.baskets[r] && lane.basket && (
+            <div className="swoop-basket">🧺</div>
+          )}
+
+          {/* Left side piece if present */}
+          {leftPiece && (
+            <div className={`swoop-piece left-piece ${leftPiece.pi === game.current && leftPiece.pc.active ? 'active' : ''} ${leftPiece.pc.carrying ? 'carry' : ''}`}>
+              <span>
+                {leftPiece.pi === game.current && leftPiece.pc.active
+                  ? game.players[leftPiece.pi].activeIcon
+                  : game.players[leftPiece.pi].pieceIcon}
+              </span>
+              {leftPiece.pc.carrying && (
+                <span className="mobile-carry-indicator">↩</span>
+              )}
+              {leftPiece.pi === game.current && leftPiece.pc.active && (
+                <div className="swoop-ring"></div>
+              )}
+            </div>
+          )}
+
+          {/* Right side piece if present */}
+          {rightPiece && (
+            <div className={`swoop-piece right-piece ${rightPiece.pi === game.current && rightPiece.pc.active ? 'active' : ''} ${rightPiece.pc.carrying ? 'carry' : ''}`}>
+              <span>
+                {rightPiece.pi === game.current && rightPiece.pc.active
+                  ? game.players[rightPiece.pi].activeIcon
+                  : game.players[rightPiece.pi].pieceIcon}
+              </span>
+              {rightPiece.pc.carrying && (
+                <span className="mobile-carry-indicator">↩</span>
+              )}
+              {rightPiece.pi === game.current && rightPiece.pc.active && (
+                <div className="swoop-ring"></div>
+              )}
+            </div>
+          )}
         </div>
       );
     }
@@ -737,8 +847,8 @@ export default function App(){
     let side = null;
     let step = null;
 
-    // Check left side
-    for (let k = 1; k <= lane.L; k++) {
+    // Check left side (excluding final step which is handled by center column)
+    for (let k = 1; k < lane.L; k++) { // k < lane.L excludes the final step
       if (colForStep('L', k, lane.L) === c) {
         side = 'L';
         step = k;
@@ -746,9 +856,9 @@ export default function App(){
       }
     }
 
-    // Check right side if not found on left
+    // Check right side if not found on left (excluding final step)
     if (!side) {
-      for (let k = 1; k <= lane.L; k++) {
+      for (let k = 1; k < lane.L; k++) { // k < lane.L excludes the final step
         if (colForStep('R', k, lane.L) === c) {
           side = 'R';
           step = k;
@@ -883,7 +993,7 @@ export default function App(){
               disabled={(() => {
                 if (game.mode === 'preroll') return false;
                 if (game.mode === 'rolled' || game.mode === 'pairChosen') {
-                  return anyActionThisRoll();
+                  return anyMandatoryActionThisRoll();
                 }
                 return true;
               })()}
@@ -891,7 +1001,11 @@ export default function App(){
               {(() => {
                 if (game.mode === 'preroll') return '🏦 Bank';
                 if (game.mode === 'rolled' || game.mode === 'pairChosen') {
-                  return anyActionThisRoll() ? '❌ Must Use' : '💥 Bust';
+                  const mandatory = anyMandatoryActionThisRoll();
+                  const any = anyActionThisRoll();
+                  if (mandatory) return '❌ Must Move';
+                  if (any) return '🏦 Bank';
+                  return '💥 Bust';
                 }
                 return '🏦 Bank';
               })()}

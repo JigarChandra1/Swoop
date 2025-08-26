@@ -387,6 +387,40 @@ body {
   font-size: 0.7rem;
 }
 
+/* Merged final step styles */
+.swoop-center.merged-final {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.swoop-basket {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  font-size: 0.8rem;
+  z-index: 10;
+}
+
+.swoop-piece.left-piece {
+  position: relative;
+  margin-right: 4px;
+}
+
+.swoop-piece.right-piece {
+  position: relative;
+  margin-left: 4px;
+}
+
+/* When both pieces are present, stack them */
+.swoop-center.merged-final .swoop-piece {
+  display: inline-block;
+  margin: 0 1px;
+}
+
 .swoop-ring {
   position: absolute;
   inset: -1px;
