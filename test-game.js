@@ -22,11 +22,12 @@ function testGameLogic() {
   console.log('✓ Lane configuration correct:', LANES.length === 11);
   
   // Test checkpoints function
-  function checkpoints(L){ 
-    const out=[2]; 
-    if(L>=6) out.push(4); 
-    out.push(L-1); 
-    return [...new Set(out)].filter(x=>x>=1&&x<=L); 
+  function checkpoints(L){
+    const out=[2];
+    if(L>=6) out.push(4);
+    out.push(L-1);
+    out.push(L);
+    return [...new Set(out)].filter(x=>x>=1&&x<=L);
   }
   
   console.log('✓ Checkpoints for L=7:', checkpoints(7)); // Should be [2, 4, 6]

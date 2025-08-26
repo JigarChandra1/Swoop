@@ -14,7 +14,7 @@ const LANES = [
   {sum:12, L:3, basket:true},
 ];
 
-function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); return [...new Set(out)].filter(x=>x>=1&&x<=L); }
+function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); out.push(L); return [...new Set(out)].filter(x=>x>=1&&x<=L); }
 function deterrents(L,sum){ if(L<=3) return []; const det=[3,L-2]; if((sum===6||sum===8)&&L>=5) det.push(5); const cps=checkpoints(L); return [...new Set(det)].filter(x=>x>=1&&x<=L && !cps.includes(x)); }
 const oddSlope={3:+1,5:-1,7:-1,9:-1,11:+1};
 
