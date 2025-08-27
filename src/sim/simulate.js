@@ -121,6 +121,11 @@ function ensurePieceForSum(game, pl, sum) {
   let pc = pieceOnLane(pl, r);
   const side = pl.side;
   if (pc) {
+    // Special handling for pieces at top step
+    if (pc.step === LANES[pc.r].L) {
+      return ensureTopStepPiece(game, pl, pc);
+    }
+
     if (!pc.active && activeCount(pl) < 2) {
       pc.active = true;
       // Log piece activation
@@ -148,6 +153,26 @@ function ensurePieceForSum(game, pl, sum) {
   return pc;
 }
 
+// Handle pieces at top step with multiple options
+function ensureTopStepPiece(game, pl, pc) {
+  // First, try to activate if not already active
+  if (!pc.active && activeCount(pl) < 2) {
+    pc.active = true;
+    // Log piece activation
+    game.moveHistory.push({
+      type: 'activate',
+      player: game.current,
+      piece: { r: pc.r, step: pc.step },
+      turn: game.moveHistory.filter(m => m.type === 'turn_start').length
+    });
+  }
+  return pc;
+}
+
+function activeCount(pl) {
+  return pl.pieces.filter((p) => p.active).length;
+}
+
 function canMoveOnSum(game, pl, sum) {
   const r = LANES.findIndex((x) => x.sum === sum);
   if (r < 0) return false;
@@ -156,12 +181,58 @@ function canMoveOnSum(game, pl, sum) {
     // For existing pieces, check if they can be activated or are already active
     if (!pc.active && activeCount(pl) >= 2) return false; // Can't activate if already at max active pieces
     const L = LANES[pc.r].L;
+
+    // Special case: piece at top step has multiple options
+    if (pc.step === L) {
+      return canTopStepActivate(game, pl, pc) || canTopStepMoveDown(game, pc) || canTopStepFreeSwoop(game, pc);
+    }
+
     const dir = pc.carrying ? -1 : +1;
     const ns = pc.step + dir;
     return ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns);
   } else {
     return pl.pieces.length < 5 && !occupied(game, r, pl.side, 1) && activeCount(pl) < 2;
   }
+}
+
+// Check if a piece at top step can be activated
+function canTopStepActivate(game, pl, pc) {
+  return !pc.active && activeCount(pl) < 2;
+}
+
+// Check if a piece at top step can move down (especially useful when carrying)
+function canTopStepMoveDown(game, pc) {
+  const L = LANES[pc.r].L;
+  if (pc.step !== L) return false;
+  const downStep = L - 1;
+  return downStep >= 1 && !occupied(game, pc.r, pc.side, downStep);
+}
+
+// Check if a piece at top step can do a free swoop to adjacent lanes
+function canTopStepFreeSwoop(game, pc) {
+  if (pc.step !== LANES[pc.r].L) return false;
+  return potentialTopStepSwoops(game, pc).length > 0;
+}
+
+// Get potential swoop targets for a piece at top step (free swoop)
+function potentialTopStepSwoops(game, pc) {
+  const targets = [];
+  const r = pc.r;
+  const L = LANES[r].L;
+
+  if (pc.step !== L) return targets; // Only for pieces at top step
+
+  for (const dr of [-1, +1]) {
+    const r2 = r + dr;
+    if (r2 < 0 || r2 >= LANES.length) continue;
+
+    // For top step free swoop, piece can go to top step of adjacent lanes
+    const step2 = LANES[r2].L;
+    if (!occupied(game, r2, pc.side, step2)) {
+      targets.push({ r: r2, step: step2 });
+    }
+  }
+  return targets;
 }
 
 function afterMovePickup(game, pc) {
@@ -194,6 +265,86 @@ function advanceOne(game, pc) {
     return true;
   }
   return false;
+}
+
+// Move a piece down from top step (especially useful when carrying)
+function moveTopStepDown(game, pc) {
+  const L = LANES[pc.r].L;
+  if (pc.step !== L) return false;
+
+  const downStep = L - 1;
+  if (downStep >= 1 && !occupied(game, pc.r, pc.side, downStep)) {
+    const oldStep = pc.step;
+    pc.step = downStep;
+
+    // Log the move down
+    game.moveHistory.push({
+      type: 'move_down',
+      player: game.current,
+      piece: { r: pc.r, from: oldStep, to: pc.step },
+      carrying: pc.carrying,
+      turn: game.moveHistory.filter(m => m.type === 'turn_start').length
+    });
+    return true;
+  }
+  return false;
+}
+
+// Perform a free swoop from top step to adjacent lane's top step
+function performTopStepFreeSwoop(game, pc, target) {
+  if (pc.step !== LANES[pc.r].L) return false;
+  if (occupied(game, target.r, pc.side, target.step)) return false;
+
+  const oldR = pc.r;
+  const oldStep = pc.step;
+  pc.r = target.r;
+  pc.step = target.step;
+
+  // Check for basket pickup after swoop
+  afterMovePickup(game, pc);
+
+  // Log the free swoop
+  game.moveHistory.push({
+    type: 'free_swoop',
+    player: game.current,
+    piece: { from: { r: oldR, step: oldStep }, to: { r: pc.r, step: pc.step } },
+    carrying: pc.carrying,
+    turn: game.moveHistory.filter(m => m.type === 'turn_start').length
+  });
+  return true;
+}
+
+// Choose the best action for a piece at top step
+function chooseTopStepAction(game, pc) {
+  // Prefer move down if carrying (helps get home faster)
+  if (pc.carrying && canTopStepMoveDown(game, pc)) {
+    return 'move_down';
+  }
+
+  // Otherwise prefer free swoop if available
+  if (canTopStepFreeSwoop(game, pc)) {
+    return 'free_swoop';
+  }
+
+  // Default to just activation (no movement)
+  return 'activate';
+}
+
+// Choose the best target for a top step free swoop
+function chooseBestTopStepSwoopTarget(targets, pc) {
+  if (targets.length === 0) return null;
+
+  // If carrying, prefer lanes that help get home (even sums with baskets)
+  if (pc.carrying) {
+    const basketTargets = targets.filter(t => LANES[t.r].basket);
+    if (basketTargets.length > 0) {
+      return basketTargets[0];
+    }
+  }
+
+  // Otherwise, prefer higher sum lanes (better positioning)
+  targets.sort((a, b) => LANES[b.r].sum - LANES[a.r].sum);
+  return targets[0];
 }
 
 function potentialSwoops(game, pc) {
@@ -574,8 +725,31 @@ function playTurn(game, bots, rng, metrics, targetScore) {
         // In practice, this is rare given conditions
       } else {
         const had = pc.step;
-        if (pieceOnLane(pl, pc.r) && pc.step === had) {
-          // existing piece — advance once
+        const L = LANES[pc.r].L;
+
+        // Special handling for pieces at top step
+        if (pc.step === L && had === L) {
+          // Piece was already at top step, choose best action
+          const topStepAction = chooseTopStepAction(game, pc);
+          if (topStepAction === 'move_down' && canTopStepMoveDown(game, pc)) {
+            if (moveTopStepDown(game, pc)) {
+              turnStats.moves++;
+              turnStats.actionsThisTurn++;
+            }
+          } else if (topStepAction === 'free_swoop') {
+            const targets = potentialTopStepSwoops(game, pc);
+            if (targets.length > 0) {
+              // Choose best target (prefer carrying pieces to move toward home)
+              const target = chooseBestTopStepSwoopTarget(targets, pc);
+              if (performTopStepFreeSwoop(game, pc, target)) {
+                turnStats.swoops++;
+                turnStats.actionsThisTurn++;
+              }
+            }
+          }
+          // If no special action taken, piece was just activated (handled in ensurePieceForSum)
+        } else if (pieceOnLane(pl, pc.r) && pc.step === had) {
+          // existing piece — advance once (normal case)
           if (advanceOne(game, pc)) {
             turnStats.moves++;
             turnStats.actionsThisTurn++;

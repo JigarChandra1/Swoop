@@ -222,6 +222,8 @@ let current=0;
 let rolled=null;
 let selectedPair=null;
 let mode='preroll';
+let topStepPiece=null;
+let topStepTargets=null;
 
 const statusEl=document.getElementById('status');
 const rollBtn=document.getElementById('rollBtn');
@@ -438,7 +440,14 @@ function canMoveOnSum(pl, sum){
   if(pc){
     // For existing pieces, check if they can be activated or are already active
     if(!pc.active && act>=2) return false; // Can't activate if already at max active pieces
-    const L=lanes[r].L; const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
+    const L=lanes[r].L;
+
+    // Special case: piece at top step has multiple options
+    if(pc.step === L){
+      return canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc);
+    }
+
+    const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
     if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
       return true;  // existing piece can move if it can be activated or is already active
     }
@@ -448,11 +457,55 @@ function canMoveOnSum(pl, sum){
     return (pl.pieces.length<5 && !occupied(r, side, 1) && act<2);
   }
 }
+
+// Check if a piece at top step can be activated
+function canTopStepActivate(pl, pc){
+  return !pc.active && activeCount(pl) < 2;
+}
+
+// Check if a piece at top step can move down
+function canTopStepMoveDown(pc){
+  const L = lanes[pc.r].L;
+  if(pc.step !== L) return false;
+  const downStep = L - 1;
+  return downStep >= 1 && !occupied(pc.r, pc.side, downStep);
+}
+
+// Check if a piece at top step can do a free swoop
+function canTopStepFreeSwoop(pc){
+  if(pc.step !== lanes[pc.r].L) return false;
+  return potentialTopStepSwoops(pc).length > 0;
+}
+
+// Get potential swoop targets for a piece at top step
+function potentialTopStepSwoops(pc){
+  const targets = [];
+  const r = pc.r;
+  const L = lanes[r].L;
+
+  if(pc.step !== L) return targets;
+
+  for(const dr of [-1, +1]){
+    const r2 = r + dr;
+    if(r2 < 0 || r2 >= lanes.length) continue;
+
+    const step2 = lanes[r2].L;
+    if(!occupied(r2, pc.side, step2)){
+      targets.push({r: r2, step: step2});
+    }
+  }
+  return targets;
+}
 function ensurePieceForSum(pl, sum){
   const r = lanes.findIndex(x=>x.sum===sum);
   let pc = pieceOnLane(pl, r);
   const side = (pl===players[0]) ? 'L' : 'R';
   if(pc){
+    // Special handling for pieces at top step
+    if(pc.step === lanes[pc.r].L){
+      return ensureTopStepPiece(pl, pc);
+    }
+
     if(!pc.active && activeCount(pl)<2){ pc.active=true; }
     return pc;
   }
@@ -461,6 +514,48 @@ function ensurePieceForSum(pl, sum){
   pc = {r, side, step:1, carrying:false, active:true};
   pl.pieces.push(pc);
   return pc;
+}
+
+// Handle pieces at top step with multiple options
+function ensureTopStepPiece(pl, pc){
+  // First, try to activate if not already active
+  if(!pc.active && activeCount(pl) < 2){
+    pc.active = true;
+  }
+  return pc;
+}
+
+// Choose the best action for a piece at top step
+function chooseTopStepAction(pc){
+  // Prefer move down if carrying (helps get home faster)
+  if(pc.carrying && canTopStepMoveDown(pc)){
+    return 'move_down';
+  }
+
+  // Otherwise prefer free swoop if available
+  if(canTopStepFreeSwoop(pc)){
+    return 'free_swoop';
+  }
+
+  // Default to just activation (no movement)
+  return 'activate';
+}
+
+// Choose the best target for a top step free swoop
+function chooseBestTopStepSwoopTarget(targets, pc){
+  if(targets.length === 0) return null;
+
+  // If carrying, prefer lanes that help get home (even sums with baskets)
+  if(pc.carrying){
+    const basketTargets = targets.filter(t => lanes[t.r].basket);
+    if(basketTargets.length > 0){
+      return basketTargets[0];
+    }
+  }
+
+  // Otherwise, prefer higher sum lanes (better positioning)
+  targets.sort((a, b) => lanes[b.r].sum - lanes[a.r].sum);
+  return targets[0];
 }
 function afterMovePickup(pc){
   const lane=lanes[pc.r]; const L=lane.L;
@@ -479,11 +574,64 @@ function usePairForMove(){
     // just activated new lane; piece remains at step 1
   }else{
     const L = lanes[pc.r].L;
-    const dir = pc.carrying ? -1 : +1;
-    const ns = pc.step + dir;
-    if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)){ toast('Blocked.'); return; }
-    pc.step = ns;
-    tryPickupBasket(pc);
+
+    // Special handling for pieces at top step
+    if(pc.step === L){
+      const topStepAction = chooseTopStepAction(pc);
+      if(topStepAction === 'move_down' && canTopStepMoveDown(pc)){
+        pc.step = L - 1;
+        toast('Moved down from top step!');
+      } else if(topStepAction === 'free_swoop'){
+        const targets = potentialTopStepSwoops(pc);
+        if(targets.length > 1){
+          // Multiple swoop options - let user choose
+          mode = 'chooseTopStepSwoop';
+          topStepPiece = pc;
+          topStepTargets = targets;
+          clearHighlights();
+
+          // Highlight the available targets
+          for(const target of targets){
+            const cell = locate(target.r, pc.side, target.step);
+            if(cell){
+              cell.classList.add('highlight');
+              cell.onclick = () => {
+                // Perform the swoop
+                pc.r = target.r;
+                pc.step = target.step;
+                tryPickupBasket(pc);
+                toast(`Free swoop to lane ${lanes[target.r].sum}!`);
+
+                // Clean up and continue
+                rolled=null; selectedPair=null; mode='preroll';
+                topStepPiece=null; topStepTargets=null;
+                diceRow.innerHTML=''; pairRow.innerHTML='';
+                clearHighlights();
+                render();
+                statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;
+              };
+            }
+          }
+          statusEl.textContent = `${pl.name}: Choose where to swoop from top step.`;
+          return;
+        } else if(targets.length === 1){
+          // Only one option - auto-select
+          const target = targets[0];
+          pc.r = target.r;
+          pc.step = target.step;
+          tryPickupBasket(pc);
+          toast('Free swoop from top step!');
+        }
+      }
+      // If no special action taken, piece was just activated
+    } else {
+      // Normal piece movement
+      const dir = pc.carrying ? -1 : +1;
+      const ns = pc.step + dir;
+      if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)){ toast('Blocked.'); return; }
+      pc.step = ns;
+      tryPickupBasket(pc);
+    }
   }
   rolled=null; selectedPair=null; mode='preroll'; diceRow.innerHTML=''; pairRow.innerHTML='';
   render(); statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;

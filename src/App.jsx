@@ -192,7 +192,14 @@ export default function App(){
     if(pc){
       // For existing pieces, check if they can be activated or are already active
       if(!pc.active && activeCount(pl)>=2) return false; // Can't activate if already at max active pieces
-      const L=LANES[r].L; const dir = pc.carrying?-1:+1; const ns=pc.step+dir;
+      const L=LANES[r].L;
+
+      // Special case: piece at top step has multiple options
+      if(pc.step === L){
+        return canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc);
+      }
+
+      const dir = pc.carrying?-1:+1; const ns=pc.step+dir;
       return ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns);
     } else {
       const side=(pl===game.players[0])?'L':'R';
@@ -200,11 +207,55 @@ export default function App(){
     }
   }
 
+  // Check if a piece at top step can be activated
+  function canTopStepActivate(pl, pc){
+    return !pc.active && activeCount(pl) < 2;
+  }
+
+  // Check if a piece at top step can move down
+  function canTopStepMoveDown(pc){
+    const L = LANES[pc.r].L;
+    if(pc.step !== L) return false;
+    const downStep = L - 1;
+    return downStep >= 1 && !occupied(pc.r, pc.side, downStep);
+  }
+
+  // Check if a piece at top step can do a free swoop
+  function canTopStepFreeSwoop(pc){
+    if(pc.step !== LANES[pc.r].L) return false;
+    return potentialTopStepSwoops(pc).length > 0;
+  }
+
+  // Get potential swoop targets for a piece at top step
+  function potentialTopStepSwoops(pc){
+    const targets = [];
+    const r = pc.r;
+    const L = LANES[r].L;
+
+    if(pc.step !== L) return targets;
+
+    for(const dr of [-1, +1]){
+      const r2 = r + dr;
+      if(r2 < 0 || r2 >= LANES.length) continue;
+
+      const step2 = LANES[r2].L;
+      if(!occupied(r2, pc.side, step2)){
+        targets.push({r: r2, step: step2});
+      }
+    }
+    return targets;
+  }
+
   function ensurePieceForSum(pl,sum){
     const r=LANES.findIndex(x=>x.sum===sum);
     let pc = pieceOnLane(pl,r);
     const side=(pl===game.players[0])?'L':'R';
     if(pc){
+      // Special handling for pieces at top step
+      if(pc.step === LANES[pc.r].L){
+        return ensureTopStepPiece(pl, pc);
+      }
+
       if(!pc.active && activeCount(pl)<2) pc.active=true;
       return pc;
     }
@@ -213,6 +264,48 @@ export default function App(){
     pc={r, side, step:1, carrying:false, active:true};
     pl.pieces.push(pc);
     return pc;
+  }
+
+  // Handle pieces at top step with multiple options
+  function ensureTopStepPiece(pl, pc){
+    // First, try to activate if not already active
+    if(!pc.active && activeCount(pl) < 2){
+      pc.active = true;
+    }
+    return pc;
+  }
+
+  // Choose the best action for a piece at top step
+  function chooseTopStepAction(pc){
+    // Prefer move down if carrying (helps get home faster)
+    if(pc.carrying && canTopStepMoveDown(pc)){
+      return 'move_down';
+    }
+
+    // Otherwise prefer free swoop if available
+    if(canTopStepFreeSwoop(pc)){
+      return 'free_swoop';
+    }
+
+    // Default to just activation (no movement)
+    return 'activate';
+  }
+
+  // Choose the best target for a top step free swoop
+  function chooseBestTopStepSwoopTarget(targets, pc){
+    if(targets.length === 0) return null;
+
+    // If carrying, prefer lanes that help get home (even sums with baskets)
+    if(pc.carrying){
+      const basketTargets = targets.filter(t => LANES[t.r].basket);
+      if(basketTargets.length > 0){
+        return basketTargets[0];
+      }
+    }
+
+    // Otherwise, prefer higher sum lanes (better positioning)
+    targets.sort((a, b) => LANES[b.r].sum - LANES[a.r].sum);
+    return targets[0];
   }
 
   function afterMovePickup(pc, newGame){
@@ -241,16 +334,70 @@ export default function App(){
       // spawned new piece at step 1
     }else{
       const L=LANES[pc.r].L;
-      const dir=pc.carrying?-1:+1;
-      const ns=pc.step+dir;
-      if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)) return;
-      pc.step=ns;
-      afterMovePickup(pc, newGame);
+
+      // Special handling for pieces at top step
+      if(pc.step === L){
+        const topStepAction = chooseTopStepAction(pc);
+        if(topStepAction === 'move_down' && canTopStepMoveDown(pc)){
+          pc.step = L - 1;
+          showToast('Moved down from top step!');
+        } else if(topStepAction === 'free_swoop'){
+          const targets = potentialTopStepSwoops(pc);
+          if(targets.length > 1){
+            // Multiple swoop options - let user choose
+            const updatedGame = {...newGame, mode:'chooseTopStepSwoop', topStepPiece:pc, topStepTargets:targets};
+            updatedGame.message = `${pl.name}: Choose where to swoop from top step.`;
+            setGame(updatedGame);
+            return;
+          } else if(targets.length === 1){
+            // Only one option - auto-select
+            const target = targets[0];
+            pc.r = target.r;
+            pc.step = target.step;
+            afterMovePickup(pc, newGame);
+            showToast('Free swoop from top step!');
+          }
+        }
+        // If no special action taken, piece was just activated
+      } else {
+        // Normal piece movement
+        const dir=pc.carrying?-1:+1;
+        const ns=pc.step+dir;
+        if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)) return;
+        pc.step=ns;
+        afterMovePickup(pc, newGame);
+      }
     }
 
     newGame.rolled=null;
     newGame.selectedPair=null;
     newGame.mode='preroll';
+    newGame.message=`${pl.name}: Roll or Bank.`;
+    setGame(newGame);
+  }
+
+  function chooseTopStepSwoopTarget(target){
+    if(!(game.mode==='chooseTopStepSwoop' && game.topStepPiece && game.topStepTargets)) return;
+
+    const newGame = {...game};
+    const pc = game.topStepPiece;
+
+    // Find the piece in the current player's pieces and update it
+    const pl = newGame.players[newGame.current];
+    const actualPiece = pl.pieces.find(p => p.r === pc.r && p.step === pc.step && p.side === pc.side);
+
+    if(actualPiece){
+      actualPiece.r = target.r;
+      actualPiece.step = target.step;
+      afterMovePickup(actualPiece, newGame);
+      showToast(`Free swoop to lane ${LANES[target.r].sum}!`);
+    }
+
+    newGame.rolled=null;
+    newGame.selectedPair=null;
+    newGame.mode='preroll';
+    newGame.topStepPiece=null;
+    newGame.topStepTargets=null;
     newGame.message=`${pl.name}: Roll or Bank.`;
     setGame(newGame);
   }
@@ -339,6 +486,12 @@ export default function App(){
       const target = game.swoopTargets.find(t => t.r === r && t.step === step);
       if (target && game.swoopSource && game.swoopSource.side === side) {
         finalizeSwoop(game.swoopSource, target);
+      }
+    } else if (game.mode === 'chooseTopStepSwoop') {
+      // Click on a destination tile for top step free swooping
+      const target = game.topStepTargets.find(t => t.r === r && t.step === step);
+      if (target && game.topStepPiece && game.topStepPiece.side === side) {
+        chooseTopStepSwoopTarget(target);
       }
     } else if (game.mode === 'tailwind') {
       // Tailwind actions
@@ -784,6 +937,12 @@ export default function App(){
     if (game.mode === 'pickSwoopDest' && game.swoopTargets) {
       return game.swoopTargets.some(t => t.r === r && t.step === step) &&
              game.swoopSource && game.swoopSource.side === side;
+    }
+
+    // Highlight top step swoop destinations
+    if (game.mode === 'chooseTopStepSwoop' && game.topStepTargets && game.topStepPiece) {
+      return game.topStepTargets.some(t => t.r === r && t.step === step) &&
+             game.topStepPiece.side === side;
     }
 
     // Highlight tailwind options
