@@ -279,6 +279,22 @@ function placePieces(){
 }
 function renderScores(){ document.getElementById('score0').textContent=players[0].score; document.getElementById('score1').textContent=players[1].score; }
 
+function checkVictory(){
+  const TARGET_SCORE = 2;
+  for(let i = 0; i < players.length; i++){
+    if(players[i].score >= TARGET_SCORE){
+      mode = 'gameOver';
+      statusEl.textContent = `🎉 ${players[i].name} wins with ${players[i].score} deliveries!`;
+      rollBtn.disabled = true;
+      useMoveBtn.disabled = true;
+      useSwoopBtn.disabled = true;
+      bankBtn.disabled = true;
+      return true;
+    }
+  }
+  return false;
+}
+
 /* ---------- Buttons enable/disable ---------- */
 function canSwoopThisRoll(){
   if(!(mode==='pairChosen' && selectedPair)) return false;
@@ -303,6 +319,16 @@ function anyActionThisRoll(){ return existsAnyMoveThisRoll() || canSwoopThisRoll
 
 function render(){
   clearPieces(); placePieces(); renderScores();
+
+  // Handle game over mode
+  if(mode === 'gameOver') {
+    rollBtn.disabled = true;
+    useMoveBtn.disabled = true;
+    useSwoopBtn.disabled = true;
+    bankBtn.disabled = true;
+    return;
+  }
+
   rollBtn.disabled = !(mode==='preroll');
   const canMove = (mode==='pairChosen' && selectedPair && canMoveOnSum(players[current], selectedPair.sum));
   useMoveBtn.disabled = !canMove;
@@ -579,6 +605,10 @@ function bank(){
   });
   pl.score += delivered; if(delivered) toast(`${pl.name} delivered ${delivered}.`);
   pl.pieces.forEach(p=>p.active=false);
+
+  // Check for victory after delivery
+  if(checkVictory()) return;
+
   nextPlayer();
 }
 function bust(){
@@ -603,6 +633,10 @@ function bust(){
   pl.pieces = kept;
   resolveDeterrents(pl);
   pl.pieces.forEach(p=>p.active=false);
+
+  // Check for victory after bust (in case any deliveries occurred)
+  if(checkVictory()) return;
+
   nextPlayer();
 }
 

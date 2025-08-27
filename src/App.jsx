@@ -403,6 +403,16 @@ export default function App(){
     return false;
   }
 
+  function checkVictory(gameState) {
+    const TARGET_SCORE = 2;
+    for(let i = 0; i < gameState.players.length; i++){
+      if(gameState.players[i].score >= TARGET_SCORE){
+        return { winner: i, winnerName: gameState.players[i].name };
+      }
+    }
+    return null;
+  }
+
   function resolveDeterrents(pl, newGame){
     pl.pieces=pl.pieces.filter(pc=>{
       const L=LANES[pc.r].L;
@@ -461,6 +471,15 @@ export default function App(){
     }
     resolveDeterrents(pl, newGame);
     pl.pieces.forEach(p=>p.active=false);
+
+    // Check for victory after delivery
+    const victory = checkVictory(newGame);
+    if(victory) {
+      newGame.mode = 'gameOver';
+      newGame.message = `🎉 ${victory.winnerName} wins with ${newGame.players[victory.winner].score} deliveries!`;
+      setGame(newGame);
+      return;
+    }
 
     newGame.current=1-newGame.current;
     newGame.mode='preroll';
@@ -522,6 +541,15 @@ export default function App(){
     pl.pieces=kept;
     resolveDeterrents(pl, newGame);
     pl.pieces.forEach(p=>p.active=false);
+
+    // Check for victory after bust (in case any deliveries occurred)
+    const victory = checkVictory(newGame);
+    if(victory) {
+      newGame.mode = 'gameOver';
+      newGame.message = `🎉 ${victory.winnerName} wins with ${newGame.players[victory.winner].score} deliveries!`;
+      setGame(newGame);
+      return;
+    }
 
     newGame.current=1-newGame.current;
     newGame.mode='preroll';
@@ -969,21 +997,21 @@ export default function App(){
             <button
               className={`mobile-button primary ${game.mode === 'preroll' ? 'active' : ''}`}
               onClick={roll}
-              disabled={game.mode !== 'preroll'}
+              disabled={game.mode !== 'preroll' || game.mode === 'gameOver'}
             >
               🎲 Roll
             </button>
             <button
               className="mobile-button"
               onClick={useMove}
-              disabled={!(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
+              disabled={game.mode === 'gameOver' || !(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
             >
               ➡️ Move
             </button>
             <button
               className="mobile-button"
               onClick={useSwoop}
-              disabled={!canSwoopThisRoll()}
+              disabled={game.mode === 'gameOver' || !canSwoopThisRoll()}
             >
               🔄 Swoop
             </button>
@@ -991,6 +1019,7 @@ export default function App(){
               className="mobile-button"
               onClick={bankOrBust}
               disabled={(() => {
+                if (game.mode === 'gameOver') return true;
                 if (game.mode === 'preroll') return false;
                 if (game.mode === 'rolled' || game.mode === 'pairChosen') {
                   return anyMandatoryActionThisRoll();

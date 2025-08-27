@@ -697,7 +697,9 @@ function applyBust(game) {
 }
 
 // --- One full game to target score ---
-function playGame(targetScore, rng, bots, gameIndex = 0, maxTurns = 1000, verbose = false) {
+function playGame(targetScore = 2, rng, bots, gameIndex = 0, maxTurns = 1000, verbose = false) {
+  // Fixed target score of 2 baskets for victory
+  const VICTORY_TARGET = 2;
   const game = initialGame();
 
   const metrics = {
@@ -716,14 +718,14 @@ function playGame(targetScore, rng, bots, gameIndex = 0, maxTurns = 1000, verbos
   game.moveHistory.push({
     type: 'game_start',
     gameIndex: gameIndex,
-    targetScore: targetScore,
+    targetScore: VICTORY_TARGET,
     timestamp: new Date().toISOString()
   });
 
   let turnCount = 0;
 
-  while (game.players[0].score < targetScore && game.players[1].score < targetScore && turnCount < maxTurns) {
-    playTurn(game, bots, rng, metrics, targetScore);
+  while (game.players[0].score < VICTORY_TARGET && game.players[1].score < VICTORY_TARGET && turnCount < maxTurns) {
+    playTurn(game, bots, rng, metrics, VICTORY_TARGET);
     turnCount++;
 
     if (verbose && turnCount % 100 === 0) {
@@ -738,14 +740,14 @@ function playGame(targetScore, rng, bots, gameIndex = 0, maxTurns = 1000, verbos
     // Force end game - winner is player with higher score
     if (game.players[0].score === game.players[1].score) {
       // Tie - random winner
-      game.players[Math.floor(rng() * 2)].score = targetScore;
+      game.players[Math.floor(rng() * 2)].score = VICTORY_TARGET;
     } else {
       const leader = game.players[0].score > game.players[1].score ? 0 : 1;
-      game.players[leader].score = targetScore;
+      game.players[leader].score = VICTORY_TARGET;
     }
   }
 
-  const winner = game.players[0].score >= targetScore ? 0 : 1;
+  const winner = game.players[0].score >= VICTORY_TARGET ? 0 : 1;
 
   // Add game end metadata
   game.moveHistory.push({
@@ -873,6 +875,8 @@ function chooseActionConservative(ctx) {
 
 // --- Run many rounds ---
 function runSimulation({ rounds, target, seed, saveReport = false, botType1 = 'aggressive', botType2 = 'balanced', maxTurns = 1000, verbose = false }) {
+  // Fixed target score of 2 baskets for victory
+  const VICTORY_TARGET = 2;
   const rng = makeRng(seed);
 
   const bots = [
@@ -901,7 +905,7 @@ function runSimulation({ rounds, target, seed, saveReport = false, botType1 = 'a
       console.log(`Starting game ${i + 1}/${rounds}...`);
     }
 
-    const { winner, metrics, game } = playGame(target, rng, bots, i, maxTurns, verbose);
+    const { winner, metrics, game } = playGame(VICTORY_TARGET, rng, bots, i, maxTurns, verbose);
     agg.games++;
     agg.wins[winner]++;
     agg.turns += metrics.turns;
@@ -1073,7 +1077,7 @@ Usage: node src/sim/simulate.js [options]
 
 Options:
   --rounds=N          Number of games to simulate (default: 100)
-  --target=N          Target score to win (default: 5)
+  --target=N          Target score to win (fixed at 2 baskets)
   --seed=S            Random seed for reproducibility (default: random)
   --report            Generate detailed JSON report
   --report-file=FILE  Custom filename for report
