@@ -295,6 +295,21 @@ function checkVictory(){
   return false;
 }
 
+function tryPickupBasket(pc){
+  const L=lanes[pc.r].L;
+  if(pc.step===L && lanes[pc.r].basket && !pc.carrying){
+    const ce=cells[pc.r][centerCol];
+    const basket=ce.querySelector('.piece');
+    if(basket){
+      basket.remove();
+      pc.carrying=true;
+      toast('Picked up basket!');
+      return true;
+    }
+  }
+  return false;
+}
+
 /* ---------- Buttons enable/disable ---------- */
 function canSwoopThisRoll(){
   if(!(mode==='pairChosen' && selectedPair)) return false;
@@ -452,7 +467,7 @@ function usePairForMove(){
     const ns = pc.step + dir;
     if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)){ toast('Blocked.'); return; }
     pc.step = ns;
-    afterMovePickup(pc);
+    tryPickupBasket(pc);
   }
   rolled=null; selectedPair=null; mode='preroll'; diceRow.innerHTML=''; pairRow.innerHTML='';
   render(); statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;
@@ -508,6 +523,8 @@ function usePairForSwoop(){
         }
         cell.onclick = ()=>{
           pc.r=d.r; pc.step=d.step;
+          // Check for basket pickup after swoop
+          tryPickupBasket(pc);
           rolled=null; selectedPair=null; diceRow.innerHTML=''; pairRow.innerHTML='';
           render(); triggerTailwindSelection();
         };
@@ -527,11 +544,34 @@ function triggerTailwindSelection(){
     statusEl.textContent = `${players[oppIndex].name} Tailwind: choose a piece to advance +1, or click a base to spawn.`;
     for(const pc of opp.pieces){
       const el = locate(pc.r, pc.side, pc.step); if(!el) continue;
-      el.classList.add('highlight'); el.onclick = ()=>{
-        const L=lanes[pc.r].L; const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
-        if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)) { pc.step = ns; afterMovePickup(pc); }
-        finishTailwind();
-      }; hasOption=true;
+      const L=lanes[pc.r].L; const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
+
+      // Check if this piece can advance
+      let canAdvance = false;
+      if (ns > L) {
+        // Non-carrying piece can advance beyond final step (gets removed)
+        canAdvance = !pc.carrying;
+      } else if (ns >= 1) {
+        // Normal advancement within lane bounds
+        canAdvance = !occupied(pc.r, pc.side, ns);
+      }
+
+      if (canAdvance) {
+        el.classList.add('highlight');
+        el.onclick = ()=>{
+          if (ns > L && !pc.carrying) {
+            // Remove piece that advances beyond final step
+            const index = opp.pieces.indexOf(pc);
+            if (index > -1) opp.pieces.splice(index, 1);
+          } else if (ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)) {
+            // Normal advancement
+            pc.step = ns;
+            tryPickupBasket(pc);
+          }
+          finishTailwind();
+        };
+        hasOption=true;
+      }
     }
     if(opp.pieces.length < 5){
       for(let r=0;r<rows;r++){
@@ -583,10 +623,7 @@ function bank(){
   const kept=[];
   for(const pc of pl.pieces){
     const L=lanes[pc.r].L; const cps = checkpoints(L);
-    if(pc.step===L && lanes[pc.r].basket && !pc.carrying){
-      const ce=cells[pc.r][centerCol]; const basket=ce.querySelector('.piece');
-      if(basket){ basket.remove(); pc.carrying=true; toast('Picked up basket!'); }
-    }
+    tryPickupBasket(pc);
     if(pc.carrying){
       kept.push(pc);
     }else{

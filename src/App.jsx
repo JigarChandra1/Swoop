@@ -291,8 +291,12 @@ export default function App(){
   }
 
   function finalizeSwoop(pc,target){
-    const newGame = {...game};
+    const newGame = {...game, baskets: [...game.baskets]};
     pc.r=target.r; pc.step=target.step;
+
+    // Check for basket pickup after swoop
+    afterMovePickup(pc, newGame);
+
     newGame.rolled=null;
     newGame.selectedPair=null;
     newGame.swoopSource=null;
@@ -342,13 +346,25 @@ export default function App(){
 
   function tailwindAdvance(piece){
     const newGame = {...game};
+    const opp = newGame.players[1 - newGame.current];
     const L=LANES[piece.r].L;
     const dir=piece.carrying?-1:+1;
     const ns=piece.step+dir;
-    if(ns>=1 && ns<=L && !occupied(piece.r, piece.side, ns)) {
+
+    // Handle advancement beyond final step
+    if (ns > L) {
+      // Non-carrying piece advancing beyond final step - remove from board
+      if (!piece.carrying) {
+        const index = opp.pieces.indexOf(piece);
+        if (index > -1) opp.pieces.splice(index, 1);
+      }
+      // Carrying piece can't advance beyond final step (shouldn't happen)
+    } else if (ns >= 1 && !occupied(piece.r, piece.side, ns)) {
+      // Normal advancement within lane bounds
       piece.step=ns;
       afterMovePickup(piece, newGame);
     }
+
     finishTailwind(newGame);
   }
 
@@ -377,7 +393,17 @@ export default function App(){
       const L = LANES[pc.r].L;
       const dir = pc.carrying ? -1 : +1;
       const ns = pc.step + dir;
-      if (ns >= 1 && ns <= L && !occupiedInGame(gameState, pc.r, pc.side, ns)) {
+
+      // Handle advancement beyond final step
+      if (ns > L) {
+        // Non-carrying piece can advance beyond final step (gets removed)
+        if (!pc.carrying) return true;
+        // Carrying piece can't advance beyond final step
+        continue;
+      }
+
+      // Normal advancement within lane bounds
+      if (ns >= 1 && !occupiedInGame(gameState, pc.r, pc.side, ns)) {
         return true;
       }
     }
@@ -759,7 +785,15 @@ export default function App(){
           const L = LANES[r].L;
           const dir = piece.carrying ? -1 : +1;
           const ns = piece.step + dir;
-          return ns >= 1 && ns <= L && !occupied(r, side, ns);
+
+          // Handle advancement beyond final step
+          if (ns > L) {
+            // Non-carrying piece can advance beyond final step (gets removed)
+            return !piece.carrying;
+          }
+
+          // Normal advancement within lane bounds
+          return ns >= 1 && !occupied(r, side, ns);
         }
 
         // Highlight spawn positions (step 1) if opponent has < 5 pieces

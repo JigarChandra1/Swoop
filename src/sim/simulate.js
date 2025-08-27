@@ -307,17 +307,40 @@ function tailwind(game, metrics) {
   const opp = game.players[1 - game.current];
   const side = opp.side;
 
-  // Try to advance a carrying piece toward home first
+  // Try to advance pieces - prioritize normal advancement over removal
   const candidates = [...opp.pieces];
+
+  // First pass: try normal advancement within lane bounds
   for (const pc of candidates) {
     const L = LANES[pc.r].L;
     const dir = pc.carrying ? -1 : +1;
     const ns = pc.step + dir;
+
+    // Normal advancement within lane bounds
     if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
       pc.step = ns;
       afterMovePickup(game, pc);
       metrics.tailwindAdvances++;
       return true;
+    }
+  }
+
+  // Second pass: handle advancement beyond final step (removal)
+  for (const pc of candidates) {
+    const L = LANES[pc.r].L;
+    const dir = pc.carrying ? -1 : +1;
+    const ns = pc.step + dir;
+
+    // Handle advancement beyond final step
+    if (ns > L) {
+      // Non-carrying piece advancing beyond final step - remove from board
+      if (!pc.carrying) {
+        const index = opp.pieces.indexOf(pc);
+        if (index > -1) opp.pieces.splice(index, 1);
+        metrics.tailwindAdvances++;
+        return true;
+      }
+      // Carrying piece can't advance beyond final step
     }
   }
 
@@ -575,12 +598,16 @@ function playTurn(game, bots, rng, metrics, targetScore) {
         pc.r = decision.target.r;
         pc.step = decision.target.step;
 
+        // Check for basket pickup after swoop
+        afterMovePickup(game, pc);
+
         // Log swoop
         game.moveHistory.push({
           type: 'swoop',
           player: game.current,
           piece: { from: { r: oldR, step: oldStep }, to: { r: pc.r, step: pc.step } },
           sum: decision.sum,
+          carrying: pc.carrying,
           turn: game.moveHistory.filter(m => m.type === 'turn_start').length
         });
 
