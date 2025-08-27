@@ -153,12 +153,25 @@ export default function App(){
   }
 
   function selectPair(i){
-    if(game.mode!=='rolled' && game.mode!=='pairChosen') return;
+    // Allow pair selection from rolled, pairChosen, or swoop modes (to deselect swoop)
+    if(game.mode!=='rolled' && game.mode!=='pairChosen' && game.mode!=='chooseSwoop' && game.mode!=='pickSwoopDest') return;
+
     const pair = game.rolled.pairs[i];
     const newGame = {...game, selectedPair:pair, mode:'pairChosen'};
 
+    // Clear any swoop-related state when switching pairs
+    newGame.swoopSource = null;
+    newGame.swoopTargets = null;
+
     const canMove = canMoveOnSum(game.players[game.current], pair.sum);
-    const canSwoop = canSwoopThisRoll();
+
+    // Recalculate canSwoop with the new pair selection
+    const selectedSum = pair.sum;
+    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
+    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
+    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
+    const eligiblePieces = game.players[game.current].pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
+    const canSwoop = eligiblePieces.some(pc => potentialSwoops(pc).length > 0);
 
     if(canMove && canSwoop) {
       newGame.message = `${game.players[game.current].name}: Move or Swoop.`;

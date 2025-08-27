@@ -385,7 +385,23 @@ function renderDiceAndPairs(){
   const d=rolled.d;
   diceRow.innerHTML=d.map(v=>`<div class="die">${v}</div>`).join('');
   pairRow.innerHTML=rolled.pairs.map((p,i)=>`<div class="pair ${selectedPair && selectedPair.i===p.i && selectedPair.j===p.j?'selected':''}" data-i="${i}">${d[p.i]} + ${d[p.j]} = <b>${p.sum}</b></div>`).join('');
-  Array.from(pairRow.children).forEach(el=>{ el.onclick=()=>{ Array.from(pairRow.children).forEach(x=>x.classList.remove('selected')); el.classList.add('selected'); selectedPair=rolled.pairs[+el.dataset.i]; mode='pairChosen'; render(); updateStatusAfterSelect(); }; });
+  Array.from(pairRow.children).forEach(el=>{
+    el.onclick=()=>{
+      // Allow pair selection from rolled, pairChosen, or swoop modes (to deselect swoop)
+      if(mode !== 'rolled' && mode !== 'pairChosen' && mode !== 'chooseSwoop' && mode !== 'pickSwoopDest') return;
+
+      Array.from(pairRow.children).forEach(x=>x.classList.remove('selected'));
+      el.classList.add('selected');
+      selectedPair=rolled.pairs[+el.dataset.i];
+      mode='pairChosen';
+
+      // Clear any swoop-related highlights when switching pairs
+      clearHighlights();
+
+      render();
+      updateStatusAfterSelect();
+    };
+  });
 }
 function roll3(){
   const d=[r6(),r6(),r6()]; rolled={ d, pairs: [[0,1],[0,2],[1,2]].map(([i,j])=>({i,j,sum:d[i]+d[j]})) };
