@@ -1,0 +1,10 @@
+Motivation:
+First time ran into a situation where player is carrying down the basket and should’ve stopped at the checkpoint to not run a risk of ending on deterrent and falling!
+Gave me a reason for wanting to advance other pieces to form a connection and transferring the basket rather than taking the risk on going solo!
+
+Functionality:
+A new option to transfer the basket to another piece before rolling the dice.
+Basket can be transferred to another piece that is:
+1. adjacent on same or different lane OR
+2. diagonally 1 step away on a different lane
+Chain transfer: Basket can be transferred multiple times before rolling the dice.

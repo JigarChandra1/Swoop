@@ -86,6 +86,8 @@ function initialGame() {
     current: 0,
     baskets: LANES.map((l) => l.basket),
     moveHistory: [], // Track all moves for analysis
+    transferSource: null,
+    transferTargets: null
   };
 }
 
@@ -265,6 +267,55 @@ function advanceOne(game, pc) {
     return true;
   }
   return false;
+}
+
+// Transfer functionality for simulation
+function canTransfer(game, pl) {
+  return pl.pieces.some(pc => pc.carrying);
+}
+
+function getTransferTargets(game, sourcePiece, pl) {
+  const targets = [];
+
+  for (const pc of pl.pieces) {
+    if (pc === sourcePiece || pc.carrying) continue; // Can't transfer to self or carrying pieces
+
+    const sameLane = pc.r === sourcePiece.r;
+    const sameStep = pc.step === sourcePiece.step;
+    const stepDiff = Math.abs(pc.step - sourcePiece.step);
+    const laneDiff = Math.abs(pc.r - sourcePiece.r);
+
+    // Adjacent on same lane (step ±1)
+    if (sameLane && stepDiff === 1) {
+      targets.push(pc);
+    }
+    // Adjacent on different lane (same step)
+    else if (!sameLane && sameStep && laneDiff === 1) {
+      targets.push(pc);
+    }
+    // Diagonally 1 step away on different lane
+    else if (!sameLane && stepDiff === 1 && laneDiff === 1) {
+      targets.push(pc);
+    }
+  }
+
+  return targets;
+}
+
+function executeTransfer(game, sourcePiece, targetPiece) {
+  sourcePiece.carrying = false;
+  targetPiece.carrying = true;
+
+  // Log transfer
+  game.moveHistory.push({
+    type: 'transfer',
+    player: game.current,
+    from: { r: sourcePiece.r, step: sourcePiece.step },
+    to: { r: targetPiece.r, step: targetPiece.step },
+    turn: game.moveHistory.filter(m => m.type === 'turn_start').length
+  });
+
+  return true;
 }
 
 // Move a piece down from top step (especially useful when carrying)
@@ -667,7 +718,15 @@ function playTurn(game, bots, rng, metrics, targetScore) {
     turn: game.moveHistory.filter(m => m.type === 'turn_start').length + 1
   });
 
-  // Pre-roll decision: may bank before rolling
+  // Pre-roll decision: may transfer, then bank, or roll
+  const transferDecision = bot.shouldTransfer ? bot.shouldTransfer(turnStats, rng, game) : null;
+  if (transferDecision) {
+    executeTransfer(game, transferDecision.source, transferDecision.target);
+    turnStats.actionsThisTurn++;
+    metrics.transfers = (metrics.transfers || 0) + 1;
+    // After transfer, check if should bank or continue
+  }
+
   if (bot.shouldBank(turnStats, rng, game)) {
     const delivered = bank(game);
     turnStats.deliveredThisTurn += delivered;
@@ -913,6 +972,7 @@ function playGame(targetScore = 2, rng, bots, gameIndex = 0, maxTurns = 1000, ve
     tailwindAdvances: 0,
     tailwindSpawns: 0,
     deliveries: 0,
+    transfers: 0,
   };
 
   // Add game start metadata
@@ -968,17 +1028,20 @@ function createBot(type, rng) {
     case 'aggressive':
       return {
         chooseAction: chooseActionBot1,
-        shouldBank: (t, r, g) => shouldBankAggressive(t, g)
+        shouldBank: (t, r, g) => shouldBankAggressive(t, g),
+        shouldTransfer: (t, r, g) => shouldTransferAggressive(t, r, g)
       };
     case 'balanced':
       return {
         chooseAction: chooseActionBot2,
-        shouldBank: (t, r, g) => shouldBankBalanced(t, r, g)
+        shouldBank: (t, r, g) => shouldBankBalanced(t, r, g),
+        shouldTransfer: (t, r, g) => shouldTransferBalanced(t, r, g)
       };
     case 'conservative':
       return {
         chooseAction: chooseActionConservative,
-        shouldBank: (t, r, g) => shouldBankConservative(t, g)
+        shouldBank: (t, r, g) => shouldBankConservative(t, g),
+        shouldTransfer: (t, r, g) => shouldTransferConservative(t, r, g)
       };
     default:
       return createBot('balanced', rng);
@@ -1003,6 +1066,73 @@ function shouldBankAggressive(turnStats, game) {
   if (activeCount(pl) >= 2 && turnStats.actionsThisTurn >= 1) return true;
 
   return false;
+}
+
+// Transfer decision functions
+function shouldTransferAggressive(turnStats, rng, game) {
+  const pl = game.players[game.current];
+  if (!canTransfer(game, pl)) return null;
+
+  // Aggressive: Transfer to pieces closer to home (lower steps) if carrying
+  const carryingPieces = pl.pieces.filter(pc => pc.carrying);
+  for (const source of carryingPieces) {
+    const targets = getTransferTargets(game, source, pl);
+    // Prefer targets with lower step numbers (closer to home)
+    const betterTargets = targets.filter(t => t.step < source.step);
+    if (betterTargets.length > 0) {
+      betterTargets.sort((a, b) => a.step - b.step);
+      return { source, target: betterTargets[0] };
+    }
+  }
+  return null;
+}
+
+function shouldTransferBalanced(turnStats, rng, game) {
+  const pl = game.players[game.current];
+  if (!canTransfer(game, pl)) return null;
+
+  // Balanced: Transfer occasionally to spread risk
+  if (rng() > 0.3) return null; // 30% chance to consider transfer
+
+  const carryingPieces = pl.pieces.filter(pc => pc.carrying);
+  for (const source of carryingPieces) {
+    const targets = getTransferTargets(game, source, pl);
+    if (targets.length > 0) {
+      // Choose random target
+      const target = targets[Math.floor(rng() * targets.length)];
+      return { source, target };
+    }
+  }
+  return null;
+}
+
+function shouldTransferConservative(turnStats, rng, game) {
+  const pl = game.players[game.current];
+  if (!canTransfer(game, pl)) return null;
+
+  // Conservative: Only transfer if piece is in danger (on high step)
+  const carryingPieces = pl.pieces.filter(pc => pc.carrying);
+  for (const source of carryingPieces) {
+    const L = LANES[source.r].L;
+    const sum = LANES[source.r].sum;
+    const dets = deterrents(L, sum);
+
+    // Transfer if carrying piece is close to a deterrent
+    const nearDeterrent = dets.some(det => Math.abs(det - source.step) <= 2);
+    if (nearDeterrent) {
+      const targets = getTransferTargets(game, source, pl);
+      const saferTargets = targets.filter(t => {
+        const tL = LANES[t.r].L;
+        const tSum = LANES[t.r].sum;
+        const tDets = deterrents(tL, tSum);
+        return !tDets.some(det => Math.abs(det - t.step) <= 2);
+      });
+      if (saferTargets.length > 0) {
+        return { source, target: saferTargets[0] };
+      }
+    }
+  }
+  return null;
 }
 
 function shouldBankBalanced(turnStats, rng, game) {
@@ -1097,6 +1227,7 @@ function runSimulation({ rounds, target, seed, saveReport = false, botType1 = 'a
     tailwindAdvances: 0,
     tailwindSpawns: 0,
     deliveries: 0,
+    transfers: 0,
   };
 
   const allGameData = []; // Store detailed game data for report
@@ -1119,6 +1250,7 @@ function runSimulation({ rounds, target, seed, saveReport = false, botType1 = 'a
     agg.tailwindAdvances += metrics.tailwindAdvances;
     agg.tailwindSpawns += metrics.tailwindSpawns;
     agg.deliveries += metrics.deliveries;
+    agg.transfers += metrics.transfers || 0;
 
     // Store game data for detailed report
     if (saveReport) {

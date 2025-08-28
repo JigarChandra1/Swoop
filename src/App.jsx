@@ -52,7 +52,9 @@ function initialGame(){
     selectedPair:null,
     mode:'preroll',
     baskets: LANES.map(l=>l.basket),
-    message:'Monkeys, roll the dice!'
+    message:'Monkeys, roll the dice!',
+    transferSource: null,
+    transferTargets: null
   };
 }
 
@@ -105,6 +107,95 @@ export default function App(){
     }
     // For pairChosen mode, check if the selected pair can move or swoop
     return existsAnyMoveThisRoll() || canSwoopThisRoll();
+  }
+
+  // Transfer functionality
+  function canTransfer(){
+    if(game.mode !== 'preroll') return false;
+    const pl = game.players[game.current];
+    return pl.pieces.some(pc => pc.carrying);
+  }
+
+  function getTransferTargets(sourcePiece){
+    const pl = game.players[game.current];
+    const targets = [];
+
+    for(const pc of pl.pieces){
+      if(pc === sourcePiece || pc.carrying) continue; // Can't transfer to self or carrying pieces
+
+      const sameLane = pc.r === sourcePiece.r;
+      const sameStep = pc.step === sourcePiece.step;
+      const stepDiff = Math.abs(pc.step - sourcePiece.step);
+      const laneDiff = Math.abs(pc.r - sourcePiece.r);
+
+      // Adjacent on same lane (step ±1)
+      if(sameLane && stepDiff === 1){
+        targets.push(pc);
+      }
+      // Adjacent on different lane (same step)
+      else if(!sameLane && sameStep && laneDiff === 1){
+        targets.push(pc);
+      }
+      // Diagonally 1 step away on different lane
+      else if(!sameLane && stepDiff === 1 && laneDiff === 1){
+        targets.push(pc);
+      }
+    }
+
+    return targets;
+  }
+
+  function startTransfer(){
+    if(!canTransfer()) return;
+    const newGame = {...game, mode:'chooseTransferSource'};
+    newGame.message = `${game.players[game.current].name}: Click a piece carrying a basket to transfer from.`;
+    setGame(newGame);
+  }
+
+  function selectTransferSource(piece){
+    if(!piece.carrying) return;
+    const targets = getTransferTargets(piece);
+    if(targets.length === 0){
+      showToast('No valid transfer targets for this piece.');
+      return;
+    }
+
+    const newGame = {...game, mode:'chooseTransferTarget', transferSource:piece, transferTargets:targets};
+    newGame.message = `${game.players[game.current].name}: Click a piece to transfer the basket to.`;
+    setGame(newGame);
+  }
+
+  function executeTransfer(targetPiece){
+    if(!game.transferSource || !targetPiece) return;
+
+    const newGame = {...game};
+    game.transferSource.carrying = false;
+    targetPiece.carrying = true;
+
+    showToast(`Basket transferred!`);
+
+    // Check if more transfers are possible (chain transfers)
+    const pl = newGame.players[newGame.current];
+    const hasMoreCarryingPieces = pl.pieces.some(pc => pc.carrying);
+
+    if(hasMoreCarryingPieces){
+      // Stay in preroll mode to allow more transfers
+      newGame.mode = 'preroll';
+      newGame.message = `${pl.name}: Roll, Bank, or Transfer again.`;
+    } else {
+      newGame.mode = 'preroll';
+      newGame.message = `${pl.name}: Roll or Bank.`;
+    }
+
+    newGame.transferSource = null;
+    newGame.transferTargets = null;
+    setGame(newGame);
+  }
+
+  function cancelTransfer(){
+    const newGame = {...game, mode:'preroll', transferSource:null, transferTargets:null};
+    newGame.message = `${game.players[game.current].name}: Roll, Bank, or Transfer.`;
+    setGame(newGame);
   }
 
   function occupied(r,side,step){
@@ -493,6 +584,16 @@ export default function App(){
       if (target && game.topStepPiece && game.topStepPiece.side === side) {
         chooseTopStepSwoopTarget(target);
       }
+    } else if (game.mode === 'chooseTransferSource') {
+      // Click on a piece carrying a basket to transfer from
+      if (occ && occ.pi === game.current && occ.pc.carrying) {
+        selectTransferSource(occ.pc);
+      }
+    } else if (game.mode === 'chooseTransferTarget') {
+      // Click on a target piece to transfer basket to
+      if (occ && occ.pi === game.current && game.transferTargets && game.transferTargets.includes(occ.pc)) {
+        executeTransfer(occ.pc);
+      }
     } else if (game.mode === 'tailwind') {
       // Tailwind actions
       const opp = game.players[1 - game.current];
@@ -774,7 +875,7 @@ export default function App(){
   // Save/Load functionality
   function getState(){
     return {
-      version: 'v5.2',
+      version: 'v5.3',
       players: game.players.map(p=>({
         name: p.name,
         pieceIcon: p.pieceIcon,
@@ -787,7 +888,9 @@ export default function App(){
       rolled: game.rolled ? {d:[...game.rolled.d], pairs:[...game.rolled.pairs]} : null,
       selectedPair: game.selectedPair ? {...game.selectedPair} : null,
       baskets: [...game.baskets],
-      message: game.message
+      message: game.message,
+      transferSource: game.transferSource ? {...game.transferSource} : null,
+      transferTargets: game.transferTargets ? [...game.transferTargets] : null
     };
   }
 
@@ -815,7 +918,9 @@ export default function App(){
         rolled: state.rolled ? {d:[...state.rolled.d], pairs:[...state.rolled.pairs]} : null,
         selectedPair: state.selectedPair || null,
         baskets: state.baskets || LANES.map(l=>l.basket),
-        message: state.message || `${state.players[state.current || 0].name}, roll the dice!`
+        message: state.message || `${state.players[state.current || 0].name}, roll the dice!`,
+        transferSource: state.transferSource || null,
+        transferTargets: state.transferTargets || null
       };
       setGame(newGame);
       showToast('Game loaded successfully!');
@@ -874,12 +979,12 @@ export default function App(){
   }
 
   function quickSave(){
-    localStorage.setItem('SWOOP_STATE_V52', JSON.stringify(getState()));
+    localStorage.setItem('SWOOP_STATE_V53', JSON.stringify(getState()));
     showToast('Saved to browser.');
   }
 
   function quickLoad(){
-    const txt = localStorage.getItem('SWOOP_STATE_V52');
+    const txt = localStorage.getItem('SWOOP_STATE_V53');
     if(!txt){
       showToast('No quick save found.');
       return;
@@ -943,6 +1048,20 @@ export default function App(){
     if (game.mode === 'chooseTopStepSwoop' && game.topStepTargets && game.topStepPiece) {
       return game.topStepTargets.some(t => t.r === r && t.step === step) &&
              game.topStepPiece.side === side;
+    }
+
+    // Highlight pieces carrying baskets for transfer source selection
+    if (game.mode === 'chooseTransferSource') {
+      const pl = game.players[game.current];
+      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step);
+      return piece && piece.carrying;
+    }
+
+    // Highlight valid transfer targets
+    if (game.mode === 'chooseTransferTarget' && game.transferTargets) {
+      const pl = game.players[game.current];
+      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step);
+      return piece && game.transferTargets.includes(piece);
     }
 
     // Highlight tailwind options
@@ -1220,6 +1339,13 @@ export default function App(){
               disabled={game.mode === 'gameOver' || !canSwoopThisRoll()}
             >
               🔄 Swoop
+            </button>
+            <button
+              className="mobile-button"
+              onClick={startTransfer}
+              disabled={game.mode === 'gameOver' || !canTransfer()}
+            >
+              🔄 Transfer
             </button>
             <button
               className="mobile-button"
