@@ -788,11 +788,6 @@ export default function App(){
     const kept=[];
 
     for(const pc of pl.pieces){
-      if(!pc.active){
-        kept.push(pc);
-        continue;
-      }
-
       const L=LANES[pc.r].L;
       const sum=LANES[pc.r].sum;
       const cps=checkpoints(L);
@@ -1472,5 +1467,4 @@ export default function App(){
     </div>
   );
 }
-
 

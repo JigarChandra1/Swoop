@@ -887,10 +887,6 @@ function applyBust(game) {
   const kept = [];
 
   for (const pc of pl.pieces) {
-    if (!pc.active) {
-      kept.push(pc);
-      continue;
-    }
 
     const L = LANES[pc.r].L;
     const sum = LANES[pc.r].sum;
@@ -1465,4 +1461,3 @@ if (require.main === module) {
 }
 
 module.exports = { runSimulation };
-

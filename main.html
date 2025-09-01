@@ -816,7 +816,6 @@ function bust(){
   const pl = players[current];
   const kept=[];
   for(const pc of pl.pieces){
-    if(!pc.active){ kept.push(pc); continue; }
     const L=lanes[pc.r].L; const sum=lanes[pc.r].sum;
     const cps = checkpoints(L); const dets = deterrents(L,sum);
     const onDet = dets.includes(pc.step);
