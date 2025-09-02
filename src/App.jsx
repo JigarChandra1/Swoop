@@ -279,20 +279,57 @@ export default function App(){
 
   function canMoveOnSum(pl,sum){
     const r=LANES.findIndex(x=>x.sum===sum); if(r<0) return false;
-    const pc = pieceOnLane(pl,r);
-    if(pc){
-      // For existing pieces, check if they can be activated or are already active
-      if(!pc.active && activeCount(pl)>=2) return false; // Can't activate if already at max active pieces
-      const L=LANES[r].L;
 
-      // Special case: piece at top step has multiple options
-      if(pc.step === L){
-        return canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc);
+    // Get all pieces on this route
+    const piecesOnRoute = pl.pieces.filter(p => p.r === r);
+
+    if(piecesOnRoute.length > 0){
+      // Check if any piece on this route can move
+      // First check active pieces, then inactive pieces
+      const activePieces = piecesOnRoute.filter(p => p.active);
+      const inactivePieces = piecesOnRoute.filter(p => !p.active);
+
+      // Check active pieces first - they can move if not blocked
+      for(const pc of activePieces){
+        const L=LANES[pc.r].L;
+
+        // Special case: piece at top step has multiple options
+        if(pc.step === L){
+          if(canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc)){
+            return true;
+          }
+        } else {
+          // Normal movement check
+          const dir = pc.carrying?-1:+1; const ns=pc.step+dir;
+          if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
+            return true;
+          }
+        }
       }
 
-      const dir = pc.carrying?-1:+1; const ns=pc.step+dir;
-      return ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns);
+      // Check inactive pieces - they can move if they can be activated first
+      if(activeCount(pl) < 2){
+        for(const pc of inactivePieces){
+          const L=LANES[pc.r].L;
+
+          // Special case: piece at top step has multiple options
+          if(pc.step === L){
+            if(canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc)){
+              return true;
+            }
+          } else {
+            // Normal movement check (after potential activation)
+            const dir = pc.carrying?-1:+1; const ns=pc.step+dir;
+            if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
+              return true;
+            }
+          }
+        }
+      }
+
+      return false;
     } else {
+      // No pieces on route - check if we can spawn a new piece
       const side=(pl===game.players[0])?'L':'R';
       return (pl.pieces.length<5 && !occupied(r, side, 1) && activeCount(pl)<2);
     }
@@ -339,20 +376,62 @@ export default function App(){
 
   function ensurePieceForSum(pl,sum){
     const r=LANES.findIndex(x=>x.sum===sum);
-    let pc = pieceOnLane(pl,r);
+
+    // Get all pieces on this route
+    const piecesOnRoute = pl.pieces.filter(p => p.r === r);
     const side=(pl===game.players[0])?'L':'R';
-    if(pc){
-      // Special handling for pieces at top step
-      if(pc.step === LANES[pc.r].L){
-        return ensureTopStepPiece(pl, pc);
+
+    if(piecesOnRoute.length > 0){
+      // Prioritize active pieces that can move, then inactive pieces that can be activated
+      const activePieces = piecesOnRoute.filter(p => p.active);
+      const inactivePieces = piecesOnRoute.filter(p => !p.active);
+
+      // First, try to find an active piece that can move
+      for(const pc of activePieces){
+        const L = LANES[pc.r].L;
+
+        // Special handling for pieces at top step
+        if(pc.step === L){
+          return ensureTopStepPiece(pl, pc);
+        }
+
+        // Check if this active piece can move
+        const dir = pc.carrying ? -1 : +1;
+        const ns = pc.step + dir;
+        if(ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)){
+          return pc; // This active piece can move
+        }
       }
 
-      if(!pc.active && activeCount(pl)<2) pc.active=true;
-      return pc;
+      // If no active piece can move, try to activate an inactive piece
+      if(activeCount(pl) < 2){
+        for(const pc of inactivePieces){
+          const L = LANES[pc.r].L;
+
+          // Special handling for pieces at top step
+          if(pc.step === L){
+            return ensureTopStepPiece(pl, pc);
+          }
+
+          // Check if this piece can move after activation
+          const dir = pc.carrying ? -1 : +1;
+          const ns = pc.step + dir;
+          if(ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)){
+            // Activate this piece
+            pc.active = true;
+            return pc;
+          }
+        }
+      }
+
+      // If we get here, no piece on the route can move
+      return null;
     }
+
+    // No pieces on route - try to spawn a new piece
     if(pl.pieces.length>=5 || activeCount(pl)>=2) return null;
     if(occupied(r,side,1)) return null;
-    pc={r, side, step:1, carrying:false, active:true};
+    const pc={r, side, step:1, carrying:false, active:true};
     pl.pieces.push(pc);
     return pc;
   }
