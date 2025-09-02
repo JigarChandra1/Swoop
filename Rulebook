@@ -56,7 +56,10 @@ If you have no piece on that sum’s lane this turn:
 Start a piece on your shore at step 1 on that lane and mark it active (see §8).
 That spend does not advance it yet; it merely claims the lane for this turn.
 If you already have a piece on that lane:
-Advance it +1 step toward the center (if returning with a basket, it moves −1 step toward home).
+Choose a direction each time you Move:
+• Up: +1 step toward the center, or
+• Down: −1 step toward home.
+At the top step (step L) you may instead move sideways to the adjacent lane’s top step (a free sideways move). This is part of Move (not a Swoop) and does not trigger Tailwind.
 Blockers: You cannot move if the destination cell is occupied.
 Pickup: Reaching the top step of an even lane instantly picks up its basket (if available) and flips that piece to returning.
 Delivery: Delivery never happens during Move; see End of Turn (§7).

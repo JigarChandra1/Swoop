@@ -130,7 +130,7 @@ function ensurePieceForSum(game, pl, sum) {
     const activePieces = piecesOnRoute.filter(p => p.active);
     const inactivePieces = piecesOnRoute.filter(p => !p.active);
 
-    // First, try to find an active piece that can move
+    // First, try to find an active piece that can move (up or down, or sideways at top)
     for (const pc of activePieces) {
       const L = LANES[pc.r].L;
 
@@ -139,15 +139,14 @@ function ensurePieceForSum(game, pl, sum) {
         return ensureTopStepPiece(game, pl, pc);
       }
 
-      // Check if this active piece can move
-      const dir = pc.carrying ? -1 : +1;
-      const ns = pc.step + dir;
-      if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
+      // Check if this active piece can move (either direction)
+      const targets = moveTargets(game, pc);
+      if (targets.length > 0) {
         return pc; // This active piece can move
       }
     }
 
-    // If no active piece can move, try to activate an inactive piece
+    // If no active piece can move, try to activate an inactive piece that can move
     if (activeCount(pl) < 2) {
       for (const pc of inactivePieces) {
         const L = LANES[pc.r].L;
@@ -157,10 +156,9 @@ function ensurePieceForSum(game, pl, sum) {
           return ensureTopStepPiece(game, pl, pc);
         }
 
-        // Check if this piece can move after activation
-        const dir = pc.carrying ? -1 : +1;
-        const ns = pc.step + dir;
-        if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
+        // Check if this piece can move after activation (either direction)
+        const targets = moveTargets(game, pc);
+        if (targets.length > 0) {
           // Activate this piece
           pc.active = true;
           // Log piece activation
@@ -231,19 +229,13 @@ function canMoveOnSum(game, pl, sum) {
     // Check active pieces first - they can move if not blocked
     for (const pc of activePieces) {
       const L = LANES[pc.r].L;
-
-      // Special case: piece at top step has multiple options
       if (pc.step === L) {
-        if (canTopStepActivate(game, pl, pc) || canTopStepMoveDown(game, pc) || canTopStepFreeSwoop(game, pc)) {
-          return true;
-        }
+        const targets = moveTargets(game, pc);
+        if (targets.length > 0) return true;
+        if (canTopStepActivate(game, pl, pc)) return true;
       } else {
-        // Normal movement check
-        const dir = pc.carrying ? -1 : +1;
-        const ns = pc.step + dir;
-        if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
-          return true;
-        }
+        const targets = moveTargets(game, pc);
+        if (targets.length > 0) return true;
       }
     }
 
@@ -251,19 +243,13 @@ function canMoveOnSum(game, pl, sum) {
     if (activeCount(pl) < 2) {
       for (const pc of inactivePieces) {
         const L = LANES[pc.r].L;
-
-        // Special case: piece at top step has multiple options
         if (pc.step === L) {
-          if (canTopStepActivate(game, pl, pc) || canTopStepMoveDown(game, pc) || canTopStepFreeSwoop(game, pc)) {
-            return true;
-          }
+          const targets = moveTargets(game, pc);
+          if (targets.length > 0) return true;
+          if (canTopStepActivate(game, pl, pc)) return true;
         } else {
-          // Normal movement check (after potential activation)
-          const dir = pc.carrying ? -1 : +1;
-          const ns = pc.step + dir;
-          if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
-            return true;
-          }
+          const targets = moveTargets(game, pc);
+          if (targets.length > 0) return true;
         }
       }
     }
@@ -310,6 +296,37 @@ function potentialTopStepSwoops(game, pc) {
     const step2 = LANES[r2].L;
     if (!occupied(game, r2, pc.side, step2)) {
       targets.push({ r: r2, step: step2 });
+    }
+  }
+  return targets;
+}
+
+// Get potential move destinations for a piece (up, down, and sideways if at top step)
+function moveTargets(game, pc) {
+  const targets = [];
+  const L = LANES[pc.r].L;
+
+  // Up
+  const up = pc.step + 1;
+  if (up <= L && !occupied(game, pc.r, pc.side, up)) {
+    targets.push({ r: pc.r, step: up });
+  }
+
+  // Down
+  const down = pc.step - 1;
+  if (down >= 1 && !occupied(game, pc.r, pc.side, down)) {
+    targets.push({ r: pc.r, step: down });
+  }
+
+  // Sideways from top step
+  if (pc.step === L) {
+    for (const dr of [-1, +1]) {
+      const r2 = pc.r + dr;
+      if (r2 < 0 || r2 >= LANES.length) continue;
+      const step2 = LANES[r2].L;
+      if (!occupied(game, r2, pc.side, step2)) {
+        targets.push({ r: r2, step: step2 });
+      }
     }
   }
   return targets;
@@ -886,13 +903,30 @@ function playTurn(game, bots, rng, metrics, targetScore) {
           }
           // If no special action taken, piece was just activated (handled in ensurePieceForSum)
         } else if (pieceOnLane(pl, pc.r) && pc.step === had) {
-          // existing piece — advance once (normal case)
-          if (advanceOne(game, pc)) {
+          // existing piece — choose up or down
+          const opts = moveTargets(game, pc).filter(t => t.r === pc.r); // only up/down here
+          let chosen = null;
+          if (opts.length === 1) {
+            chosen = opts[0];
+          } else if (opts.length > 1) {
+            // Heuristic: if carrying prefer down; else prefer up
+            const up = opts.find(o => o.step === had + 1);
+            const down = opts.find(o => o.step === had - 1);
+            chosen = pc.carrying ? (down || up) : (up || down);
+          }
+          if (chosen) {
+            const oldStep = pc.step;
+            pc.step = chosen.step;
+            afterMovePickup(game, pc);
+            game.moveHistory.push({
+              type: 'move',
+              player: game.current,
+              piece: { r: pc.r, from: oldStep, to: pc.step },
+              carrying: pc.carrying,
+              turn: game.moveHistory.filter(m => m.type === 'turn_start').length
+            });
             turnStats.moves++;
             turnStats.actionsThisTurn++;
-            if (pc.carrying && pc.step === 1) {
-              // delivery realizes only on bank/bust; we count on event
-            }
           }
         } else {
           // freshly ensured; counts as action in our accounting

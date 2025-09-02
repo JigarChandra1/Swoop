@@ -448,18 +448,13 @@ function canMoveOnSum(pl, sum){
     // Check active pieces first - they can move if not blocked
     for(const pc of activePieces){
       const L=lanes[pc.r].L;
-
-      // Special case: piece at top step has multiple options
       if(pc.step === L){
-        if(canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc)){
-          return true;
-        }
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0) return true;
+        if(canTopStepActivate(pl, pc)) return true;
       } else {
-        // Normal movement check
-        const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
-        if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
-          return true;
-        }
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0) return true;
       }
     }
 
@@ -467,22 +462,17 @@ function canMoveOnSum(pl, sum){
     if(activeCount(pl) < 2){
       for(const pc of inactivePieces){
         const L=lanes[pc.r].L;
-
-        // Special case: piece at top step has multiple options
         if(pc.step === L){
-          if(canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc)){
-            return true;
-          }
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return true;
+          if(canTopStepActivate(pl, pc)) return true;
         } else {
-          // Normal movement check (after potential activation)
-          const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
-          if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
-            return true;
-          }
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return true;
         }
       }
     }
-
+  
     return false;
   } else {
     // No pieces on route - check if we can spawn a new piece
@@ -529,6 +519,37 @@ function potentialTopStepSwoops(pc){
   }
   return targets;
 }
+
+// Get potential move destinations for a piece (up, down, and sideways if at top step)
+function getMoveTargets(pc){
+  const targets = [];
+  const L = lanes[pc.r].L;
+
+  // Up
+  const up = pc.step + 1;
+  if(up <= L && !occupied(pc.r, pc.side, up)){
+    targets.push({r: pc.r, step: up});
+  }
+
+  // Down
+  const down = pc.step - 1;
+  if(down >= 1 && !occupied(pc.r, pc.side, down)){
+    targets.push({r: pc.r, step: down});
+  }
+
+  // Sideways from top step
+  if(pc.step === L){
+    for(const dr of [-1, +1]){
+      const r2 = pc.r + dr;
+      if(r2 < 0 || r2 >= rows) continue;
+      const step2 = lanes[r2].L;
+      if(!occupied(r2, pc.side, step2)){
+        targets.push({r: r2, step: step2});
+      }
+    }
+  }
+  return targets;
+}
 function ensurePieceForSum(pl, sum){
   const r = lanes.findIndex(x=>x.sum===sum);
 
@@ -541,43 +562,38 @@ function ensurePieceForSum(pl, sum){
     const activePieces = piecesOnRoute.filter(p => p.active);
     const inactivePieces = piecesOnRoute.filter(p => !p.active);
 
-    // First, try to find an active piece that can move
-    for(const pc of activePieces){
-      const L = lanes[pc.r].L;
+  // First, try to find an active piece that can move (up or down, or sideways at top)
+  for(const pc of activePieces){
+    const L = lanes[pc.r].L;
 
-      // Special handling for pieces at top step
-      if(pc.step === L){
-        return ensureTopStepPiece(pl, pc);
-      }
-
-      // Check if this active piece can move
-      const dir = pc.carrying ? -1 : +1;
-      const ns = pc.step + dir;
-      if(ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)){
-        return pc; // This active piece can move
-      }
+    if(pc.step === L){
+      return ensureTopStepPiece(pl, pc);
     }
 
-    // If no active piece can move, try to activate an inactive piece
-    if(activeCount(pl) < 2){
-      for(const pc of inactivePieces){
-        const L = lanes[pc.r].L;
+    const targets = getMoveTargets(pc);
+    if(targets.length > 0){
+      return pc; // This active piece can move
+    }
+  }
+
+  // If no active piece can move, try to activate an inactive piece that can move
+  if(activeCount(pl) < 2){
+    for(const pc of inactivePieces){
+      const L = lanes[pc.r].L;
 
         // Special handling for pieces at top step
         if(pc.step === L){
           return ensureTopStepPiece(pl, pc);
         }
 
-        // Check if this piece can move after activation
-        const dir = pc.carrying ? -1 : +1;
-        const ns = pc.step + dir;
-        if(ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)){
-          // Activate this piece
-          pc.active = true;
-          return pc;
-        }
+      const targets = getMoveTargets(pc);
+      if(targets.length > 0){
+        // Activate this piece
+        pc.active = true;
+        return pc;
       }
     }
+  }
 
     // If we get here, no piece on the route can move
     return null;
@@ -648,64 +664,38 @@ function usePairForMove(){
   if(pl.pieces.length>beforeCount){
     // just activated new lane; piece remains at step 1
   }else{
-    const L = lanes[pc.r].L;
+    // General movement: up/down anywhere; if at top, also sideways
+    const targets = getMoveTargets(pc);
+    if(targets.length === 0){
+      // No movement possible (maybe just activated)
+    } else if(targets.length === 1){
+      const target = targets[0];
+      pc.r = target.r;
+      pc.step = target.step;
+      tryPickupBasket(pc);
+    } else {
+      // Multiple choices — let user select destination (up/down/sideways)
+      mode = 'chooseMoveDest';
+      clearHighlights();
+      for(const target of targets){
+        const cell = locate(target.r, pc.side, target.step);
+        if(cell){
+          cell.classList.add('highlight');
+          cell.onclick = () => {
+            pc.r = target.r;
+            pc.step = target.step;
+            tryPickupBasket(pc);
 
-    // Special handling for pieces at top step
-    if(pc.step === L){
-      const topStepAction = chooseTopStepAction(pc);
-      if(topStepAction === 'move_down' && canTopStepMoveDown(pc)){
-        pc.step = L - 1;
-        toast('Moved down from top step!');
-      } else if(topStepAction === 'free_swoop'){
-        const targets = potentialTopStepSwoops(pc);
-        if(targets.length > 1){
-          // Multiple swoop options - let user choose
-          mode = 'chooseTopStepSwoop';
-          topStepPiece = pc;
-          topStepTargets = targets;
-          clearHighlights();
-
-          // Highlight the available targets
-          for(const target of targets){
-            const cell = locate(target.r, pc.side, target.step);
-            if(cell){
-              cell.classList.add('highlight');
-              cell.onclick = () => {
-                // Perform the swoop
-                pc.r = target.r;
-                pc.step = target.step;
-                tryPickupBasket(pc);
-                toast(`Free swoop to lane ${lanes[target.r].sum}!`);
-
-                // Clean up and continue
-                rolled=null; selectedPair=null; mode='preroll';
-                topStepPiece=null; topStepTargets=null;
-                diceRow.innerHTML=''; pairRow.innerHTML='';
-                clearHighlights();
-                render();
-                statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;
-              };
-            }
-          }
-          statusEl.textContent = `${pl.name}: Choose where to swoop from top step.`;
-          return;
-        } else if(targets.length === 1){
-          // Only one option - auto-select
-          const target = targets[0];
-          pc.r = target.r;
-          pc.step = target.step;
-          tryPickupBasket(pc);
-          toast('Free swoop from top step!');
+            rolled=null; selectedPair=null; mode='preroll';
+            diceRow.innerHTML=''; pairRow.innerHTML='';
+            clearHighlights();
+            render();
+            statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;
+          };
         }
       }
-      // If no special action taken, piece was just activated
-    } else {
-      // Normal piece movement
-      const dir = pc.carrying ? -1 : +1;
-      const ns = pc.step + dir;
-      if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)){ toast('Blocked.'); return; }
-      pc.step = ns;
-      tryPickupBasket(pc);
+      statusEl.textContent = `${pl.name}: Choose Up, Down, or Sideways.`;
+      return;
     }
   }
   rolled=null; selectedPair=null; mode='preroll'; diceRow.innerHTML=''; pairRow.innerHTML='';

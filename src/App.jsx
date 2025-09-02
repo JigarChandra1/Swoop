@@ -293,17 +293,15 @@ export default function App(){
       for(const pc of activePieces){
         const L=LANES[pc.r].L;
 
-        // Special case: piece at top step has multiple options
+        // At top step: can move down or sideways; also allow activation-only if otherwise blocked
         if(pc.step === L){
-          if(canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc)){
-            return true;
-          }
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return true;
+          if(canTopStepActivate(pl, pc)) return true;
         } else {
-          // Normal movement check
-          const dir = pc.carrying?-1:+1; const ns=pc.step+dir;
-          if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
-            return true;
-          }
+          // Anywhere else: can choose up or down
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return true;
         }
       }
 
@@ -312,17 +310,13 @@ export default function App(){
         for(const pc of inactivePieces){
           const L=LANES[pc.r].L;
 
-          // Special case: piece at top step has multiple options
           if(pc.step === L){
-            if(canTopStepActivate(pl, pc) || canTopStepMoveDown(pc) || canTopStepFreeSwoop(pc)){
-              return true;
-            }
+            const targets = getMoveTargets(pc);
+            if(targets.length > 0) return true;
+            if(canTopStepActivate(pl, pc)) return true;
           } else {
-            // Normal movement check (after potential activation)
-            const dir = pc.carrying?-1:+1; const ns=pc.step+dir;
-            if(ns>=1 && ns<=L && !occupied(pc.r, pc.side, ns)){
-              return true;
-            }
+            const targets = getMoveTargets(pc);
+            if(targets.length > 0) return true;
           }
         }
       }
@@ -374,6 +368,37 @@ export default function App(){
     return targets;
   }
 
+  // Get potential move destinations for a piece (up, down, and sideways if at top step)
+  function getMoveTargets(pc){
+    const targets = [];
+    const L = LANES[pc.r].L;
+
+    // Up
+    const up = pc.step + 1;
+    if(up <= L && !occupied(pc.r, pc.side, up)){
+      targets.push({r: pc.r, step: up});
+    }
+
+    // Down
+    const down = pc.step - 1;
+    if(down >= 1 && !occupied(pc.r, pc.side, down)){
+      targets.push({r: pc.r, step: down});
+    }
+
+    // Sideways from top step
+    if(pc.step === L){
+      for(const dr of [-1, +1]){
+        const r2 = pc.r + dr;
+        if(r2 < 0 || r2 >= LANES.length) continue;
+        const step2 = LANES[r2].L;
+        if(!occupied(r2, pc.side, step2)){
+          targets.push({r: r2, step: step2});
+        }
+      }
+    }
+    return targets;
+  }
+
   function ensurePieceForSum(pl,sum){
     const r=LANES.findIndex(x=>x.sum===sum);
 
@@ -386,24 +411,21 @@ export default function App(){
       const activePieces = piecesOnRoute.filter(p => p.active);
       const inactivePieces = piecesOnRoute.filter(p => !p.active);
 
-      // First, try to find an active piece that can move
+      // First, try to find an active piece that can move (up or down, or sideways at top)
       for(const pc of activePieces){
         const L = LANES[pc.r].L;
 
-        // Special handling for pieces at top step
         if(pc.step === L){
           return ensureTopStepPiece(pl, pc);
         }
 
-        // Check if this active piece can move
-        const dir = pc.carrying ? -1 : +1;
-        const ns = pc.step + dir;
-        if(ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)){
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0){
           return pc; // This active piece can move
         }
       }
 
-      // If no active piece can move, try to activate an inactive piece
+      // If no active piece can move, try to activate an inactive piece that can move
       if(activeCount(pl) < 2){
         for(const pc of inactivePieces){
           const L = LANES[pc.r].L;
@@ -413,10 +435,8 @@ export default function App(){
             return ensureTopStepPiece(pl, pc);
           }
 
-          // Check if this piece can move after activation
-          const dir = pc.carrying ? -1 : +1;
-          const ns = pc.step + dir;
-          if(ns >= 1 && ns <= L && !occupied(pc.r, pc.side, ns)){
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0){
             // Activate this piece
             pc.active = true;
             return pc;
@@ -503,39 +523,27 @@ export default function App(){
     if(pl.pieces.length>before){
       // spawned new piece at step 1
     }else{
-      const L=LANES[pc.r].L;
-
-      // Special handling for pieces at top step
-      if(pc.step === L){
-        const topStepAction = chooseTopStepAction(pc);
-        if(topStepAction === 'move_down' && canTopStepMoveDown(pc)){
-          pc.step = L - 1;
-          showToast('Moved down from top step!');
-        } else if(topStepAction === 'free_swoop'){
-          const targets = potentialTopStepSwoops(pc);
-          if(targets.length > 1){
-            // Multiple swoop options - let user choose
-            const updatedGame = {...newGame, mode:'chooseTopStepSwoop', topStepPiece:pc, topStepTargets:targets};
-            updatedGame.message = `${pl.name}: Choose where to swoop from top step.`;
-            setGame(updatedGame);
-            return;
-          } else if(targets.length === 1){
-            // Only one option - auto-select
-            const target = targets[0];
-            pc.r = target.r;
-            pc.step = target.step;
-            afterMovePickup(pc, newGame);
-            showToast('Free swoop from top step!');
-          }
-        }
-        // If no special action taken, piece was just activated
-      } else {
-        // Normal piece movement
-        const dir=pc.carrying?-1:+1;
-        const ns=pc.step+dir;
-        if(ns<1 || ns> L || occupied(pc.r, pc.side, ns)) return;
-        pc.step=ns;
+      // General movement: allow up or down anywhere; if at top, also sideways
+      const targets = getMoveTargets(pc);
+      if(targets.length === 0){
+        // No movement possible (maybe just activated)
+      } else if(targets.length === 1){
+        // Auto-apply single move
+        const target = targets[0];
+        pc.r = target.r;
+        pc.step = target.step;
         afterMovePickup(pc, newGame);
+      } else {
+        // Multiple choices — let user select destination (up/down/sideways)
+        const updatedGame = {
+          ...newGame,
+          mode: 'chooseMoveDest',
+          movePiece: pc,
+          moveTargets: targets
+        };
+        updatedGame.message = `${pl.name}: Choose Up, Down, or Sideways.`;
+        setGame(updatedGame);
+        return;
       }
     }
 
@@ -662,6 +670,24 @@ export default function App(){
       const target = game.topStepTargets.find(t => t.r === r && t.step === step);
       if (target && game.topStepPiece && game.topStepPiece.side === side) {
         chooseTopStepSwoopTarget(target);
+      }
+    } else if (game.mode === 'chooseMoveDest') {
+      const target = game.moveTargets && game.moveTargets.find(t => t.r === r && t.step === step);
+      if (target && game.movePiece && game.movePiece.side === side) {
+        const newGame = {...game, baskets: [...game.baskets]};
+        const pl = newGame.players[newGame.current];
+        const pc = newGame.movePiece;
+        pc.r = target.r;
+        pc.step = target.step;
+        afterMovePickup(pc, newGame);
+
+        newGame.rolled = null;
+        newGame.selectedPair = null;
+        newGame.mode = 'preroll';
+        newGame.movePiece = null;
+        newGame.moveTargets = null;
+        newGame.message = `${pl.name}: Roll or Bank.`;
+        setGame(newGame);
       }
     } else if (game.mode === 'chooseTransferSource') {
       // Click on a piece carrying a basket to transfer from
@@ -1124,6 +1150,12 @@ export default function App(){
              game.topStepPiece.side === side;
     }
 
+    // Highlight move destinations (up/down/sideways)
+    if (game.mode === 'chooseMoveDest' && game.moveTargets && game.movePiece) {
+      return game.moveTargets.some(t => t.r === r && t.step === step) &&
+             game.movePiece.side === side;
+    }
+
     // Highlight pieces carrying baskets for transfer source selection
     if (game.mode === 'chooseTransferSource') {
       const pl = game.players[game.current];
@@ -1546,4 +1578,3 @@ export default function App(){
     </div>
   );
 }
-
