@@ -56,7 +56,8 @@ function initialGame(){
     transferSource: null,
     transferTargets: null,
     pieceChoices: null,
-    selectedSum: null
+    selectedSum: null,
+    previousMode: null
   };
 }
 
@@ -113,7 +114,10 @@ export default function App(){
 
   // Transfer functionality
   function canTransfer(){
-    if(game.mode !== 'preroll') return false;
+    // Allow transfers during any mode of the current player's turn (except game over and opponent's tailwind)
+    if(game.mode === 'gameOver') return false;
+    if(game.mode === 'tailwind') return false; // Opponent's turn
+
     const pl = game.players[game.current];
     return pl.pieces.some(pc => pc.carrying);
   }
@@ -150,6 +154,8 @@ export default function App(){
   function startTransfer(){
     if(!canTransfer()) return;
     const newGame = {...game, mode:'chooseTransferSource'};
+    // Store the previous mode to return to after transfer
+    newGame.previousMode = game.mode;
     newGame.message = `${game.players[game.current].name}: Click a piece carrying a basket to transfer from.`;
     setGame(newGame);
   }
@@ -176,27 +182,77 @@ export default function App(){
 
     showToast(`Basket transferred!`);
 
-    // Check if more transfers are possible (chain transfers)
+    // Determine what mode to return to
+    const previousMode = game.previousMode || 'preroll';
     const pl = newGame.players[newGame.current];
-    const hasMoreCarryingPieces = pl.pieces.some(pc => pc.carrying);
 
-    if(hasMoreCarryingPieces){
-      // Stay in preroll mode to allow more transfers
-      newGame.mode = 'preroll';
-      newGame.message = `${pl.name}: Roll, Bank, or Transfer again.`;
-    } else {
-      newGame.mode = 'preroll';
-      newGame.message = `${pl.name}: Roll or Bank.`;
-    }
-
+    // Return to the previous mode, preserving game state
+    newGame.mode = previousMode;
     newGame.transferSource = null;
     newGame.transferTargets = null;
+    newGame.previousMode = null;
+
+    // Set appropriate message based on the mode we're returning to
+    if(previousMode === 'preroll'){
+      const hasMoreCarryingPieces = pl.pieces.some(pc => pc.carrying);
+      if(hasMoreCarryingPieces){
+        newGame.message = `${pl.name}: Roll, Bank, or Transfer again.`;
+      } else {
+        newGame.message = `${pl.name}: Roll or Bank.`;
+      }
+    } else if(previousMode === 'rolled'){
+      newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+    } else if(previousMode === 'pairChosen'){
+      const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
+      const canSwoop = canSwoopThisRoll();
+      if(canMove && canSwoop) {
+        newGame.message = `${pl.name}: Move or Swoop.`;
+      } else if(canMove) {
+        newGame.message = `${pl.name}: Move.`;
+      } else if(canSwoop) {
+        newGame.message = `${pl.name}: Swoop (optional) or Bank/Bust.`;
+      } else {
+        newGame.message = `${pl.name}: End Turn (Busted).`;
+      }
+    } else {
+      // For other modes, use a generic message
+      newGame.message = `${pl.name}: Continue your turn.`;
+    }
+
     setGame(newGame);
   }
 
   function cancelTransfer(){
-    const newGame = {...game, mode:'preroll', transferSource:null, transferTargets:null};
-    newGame.message = `${game.players[game.current].name}: Roll, Bank, or Transfer.`;
+    const previousMode = game.previousMode || 'preroll';
+    const newGame = {...game, mode: previousMode, transferSource:null, transferTargets:null, previousMode: null};
+
+    // Set appropriate message based on the mode we're returning to
+    const pl = game.players[game.current];
+    if(previousMode === 'preroll'){
+      const hasCarryingPieces = pl.pieces.some(pc => pc.carrying);
+      if(hasCarryingPieces){
+        newGame.message = `${pl.name}: Roll, Bank, or Transfer.`;
+      } else {
+        newGame.message = `${pl.name}: Roll or Bank.`;
+      }
+    } else if(previousMode === 'rolled'){
+      newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+    } else if(previousMode === 'pairChosen'){
+      const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
+      const canSwoop = canSwoopThisRoll();
+      if(canMove && canSwoop) {
+        newGame.message = `${pl.name}: Move or Swoop.`;
+      } else if(canMove) {
+        newGame.message = `${pl.name}: Move.`;
+      } else if(canSwoop) {
+        newGame.message = `${pl.name}: Swoop (optional) or Bank/Bust.`;
+      } else {
+        newGame.message = `${pl.name}: End Turn (Busted).`;
+      }
+    } else {
+      newGame.message = `${pl.name}: Continue your turn.`;
+    }
+
     setGame(newGame);
   }
 
@@ -1772,6 +1828,18 @@ export default function App(){
                   </button>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Transfer Cancel Button */}
+          {(game.mode === 'chooseTransferSource' || game.mode === 'chooseTransferTarget') && (
+            <div className="mobile-transfer-cancel">
+              <button
+                className="mobile-button"
+                onClick={cancelTransfer}
+              >
+                ❌ Cancel Transfer
+              </button>
             </div>
           )}
 

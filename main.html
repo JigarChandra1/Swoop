@@ -78,6 +78,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <button id="rollBtn" class="primary">Roll 3 Dice</button>
     <button id="useMoveBtn" disabled>Use Pair → Move</button>
     <button id="useSwoopBtn" disabled>Use Pair → Swoop</button>
+    <button id="transferBtn" disabled>🔄 Transfer</button>
+    <button id="cancelTransferBtn" disabled style="display:none">❌ Cancel Transfer</button>
     <button id="bankBtn" disabled>Bank (Stop)</button>
     <span style="flex:1"></span>
     <button id="newBtn" class="ghost">New Game</button>
@@ -229,6 +231,9 @@ let tailwindOptions=null;
 let tailwindSwoopTargets=null;
 let pieceChoices=null;
 let selectedSum=null;
+let transferSource=null;
+let transferTargets=null;
+let previousMode=null;
 
 const statusEl=document.getElementById('status');
 const rollBtn=document.getElementById('rollBtn');
@@ -347,6 +352,7 @@ function render(){
     rollBtn.disabled = true;
     useMoveBtn.disabled = true;
     useSwoopBtn.disabled = true;
+    transferBtn.disabled = true;
     bankBtn.disabled = true;
     return;
   }
@@ -356,6 +362,17 @@ function render(){
   useMoveBtn.disabled = !canMove;
   const canSwoop = canSwoopThisRoll();
   useSwoopBtn.disabled = !canSwoop;
+  transferBtn.disabled = !canTransfer();
+
+  // Show/hide cancel transfer button
+  if(mode === 'chooseTransferSource' || mode === 'chooseTransferTarget'){
+    cancelTransferBtn.style.display = 'inline-block';
+    cancelTransferBtn.disabled = false;
+  } else {
+    cancelTransferBtn.style.display = 'none';
+    cancelTransferBtn.disabled = true;
+  }
+
   if(mode==='rolled' || mode==='pairChosen'){
     const mandatory = anyMandatoryActionThisRoll();
     const any = anyActionThisRoll();
@@ -718,6 +735,155 @@ function afterMovePickup(pc){
     const ce=cells[pc.r][centerCol]; const basket=ce.querySelector('.piece');
     if(basket){ basket.remove(); pc.carrying=true; toast('Picked up basket!'); }
   }
+}
+
+// Transfer functionality
+function canTransfer(){
+  // Allow transfers during any mode of the current player's turn (except game over and opponent's tailwind)
+  if(mode === 'gameOver') return false;
+  if(mode === 'tailwind') return false; // Opponent's turn
+
+  const pl = players[current];
+  return pl.pieces.some(pc => pc.carrying);
+}
+
+function getTransferTargets(sourcePiece){
+  const pl = players[current];
+  const targets = [];
+
+  for(const pc of pl.pieces){
+    if(pc === sourcePiece || pc.carrying) continue; // Can't transfer to self or carrying pieces
+
+    const sameLane = pc.r === sourcePiece.r;
+    const sameStep = pc.step === sourcePiece.step;
+    const stepDiff = Math.abs(pc.step - sourcePiece.step);
+    const laneDiff = Math.abs(pc.r - sourcePiece.r);
+
+    // Adjacent on same lane (step ±1)
+    if(sameLane && stepDiff === 1){
+      targets.push(pc);
+    }
+    // Adjacent on different lane (same step)
+    else if(!sameLane && sameStep && laneDiff === 1){
+      targets.push(pc);
+    }
+    // Diagonally 1 step away on different lane
+    else if(!sameLane && stepDiff === 1 && laneDiff === 1){
+      targets.push(pc);
+    }
+  }
+
+  return targets;
+}
+
+function startTransfer(){
+  if(!canTransfer()) return;
+  previousMode = mode;
+  mode = 'chooseTransferSource';
+  statusEl.textContent = `${players[current].name}: Click a piece carrying a basket to transfer from.`;
+  clearHighlights();
+
+  // Highlight pieces carrying baskets
+  const pl = players[current];
+  for(const pc of pl.pieces){
+    if(pc.carrying){
+      const el = locate(pc.r, pc.side, pc.step);
+      if(el){
+        el.classList.add('highlight');
+        el.onclick = () => selectTransferSource(pc);
+      }
+    }
+  }
+}
+
+function selectTransferSource(piece){
+  if(!piece.carrying) return;
+  const targets = getTransferTargets(piece);
+  if(targets.length === 0){
+    toast('No valid transfer targets for this piece.');
+    return;
+  }
+
+  transferSource = piece;
+  transferTargets = targets;
+  mode = 'chooseTransferTarget';
+  statusEl.textContent = `${players[current].name}: Click a piece to transfer the basket to.`;
+  clearHighlights();
+
+  // Highlight transfer targets
+  for(const pc of targets){
+    const el = locate(pc.r, pc.side, pc.step);
+    if(el){
+      el.classList.add('highlight');
+      el.onclick = () => executeTransfer(pc);
+    }
+  }
+}
+
+function executeTransfer(targetPiece){
+  if(!transferSource || !targetPiece) return;
+
+  transferSource.carrying = false;
+  targetPiece.carrying = true;
+  toast('Basket transferred!');
+
+  // Determine what mode to return to
+  const returnMode = previousMode || 'preroll';
+  const pl = players[current];
+
+  // Return to the previous mode, preserving game state
+  mode = returnMode;
+  transferSource = null;
+  transferTargets = null;
+  previousMode = null;
+  clearHighlights();
+
+  // Set appropriate message based on the mode we're returning to
+  if(returnMode === 'preroll'){
+    const hasMoreCarryingPieces = pl.pieces.some(pc => pc.carrying);
+    if(hasMoreCarryingPieces){
+      statusEl.textContent = `${pl.name}: Roll, Bank, or Transfer again.`;
+    } else {
+      statusEl.textContent = `${pl.name}: Roll or Bank.`;
+    }
+  } else if(returnMode === 'rolled'){
+    statusEl.textContent = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+  } else if(returnMode === 'pairChosen'){
+    statusEl.textContent = `${pl.name}: Move, Swoop, or Bank/Bust.`;
+  } else {
+    statusEl.textContent = `${pl.name}: Continue your turn.`;
+  }
+
+  render();
+}
+
+function cancelTransfer(){
+  const returnMode = previousMode || 'preroll';
+  const pl = players[current];
+
+  mode = returnMode;
+  transferSource = null;
+  transferTargets = null;
+  previousMode = null;
+  clearHighlights();
+
+  // Set appropriate message based on the mode we're returning to
+  if(returnMode === 'preroll'){
+    const hasCarryingPieces = pl.pieces.some(pc => pc.carrying);
+    if(hasCarryingPieces){
+      statusEl.textContent = `${pl.name}: Roll, Bank, or Transfer.`;
+    } else {
+      statusEl.textContent = `${pl.name}: Roll or Bank.`;
+    }
+  } else if(returnMode === 'rolled'){
+    statusEl.textContent = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+  } else if(returnMode === 'pairChosen'){
+    statusEl.textContent = `${pl.name}: Move, Swoop, or Bank/Bust.`;
+  } else {
+    statusEl.textContent = `${pl.name}: Continue your turn.`;
+  }
+
+  render();
 }
 function usePairForMove(){
   if(!(mode==='pairChosen' && selectedPair)) return;
@@ -1258,6 +1424,8 @@ function quickLoad(){ const txt = localStorage.getItem('SWOOP_STATE_V52'); if(!t
 rollBtn.onclick = ()=>{ if(mode!=='preroll') return; roll3(); };
 useMoveBtn.onclick = ()=> usePairForMove();
 useSwoopBtn.onclick = ()=> usePairForSwoop();
+transferBtn.onclick = ()=> startTransfer();
+cancelTransferBtn.onclick = ()=> cancelTransfer();
 bankBtn.onclick = ()=>{
   if(mode==='preroll'){ bank(); }
   else if((mode==='rolled' || mode==='pairChosen') && !anyActionThisRoll()){ bust(); }
