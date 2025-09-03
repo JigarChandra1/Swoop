@@ -55,3 +55,17 @@ Notes and future considerations for bots (non-reactive for now):
 - Managing active-piece cap (max 2) strategically across lanes.
 - Endgame targeting when one point away from victory.
 
+
+
+## Geometric Board Layout (dev notes)
+
+The board is modeled at two layers:
+- Geometry spaces: fixed 11 slots (1..11) per lane with possible gaps; used for visual alignment and cross‑lane Swoop space‑matching.
+- Movement steps: only real tiles (Normal/Checkpoint/Deterrent/Start/Final) — pieces can only stand here.
+
+A per‑lane TILE_MAP defines the tile type at each geometric space. Helpers map between step↔space and test tile existence. Regular token Swoops match the current piece’s geometric space on the adjacent lane (stepForSpace). When a push (from Move or Swoop) would land a piece on a Gap, it snaps down (toward home) to the nearest lower movement step (or is removed if none). If a pushed piece is carrying, its basket transfers to the pusher.
+
+See implementations in:
+- Pass & Play HTML: `main.html` (TILE_MAP, tile helpers, push chain)
+- React: `src/App.jsx` (TILE_MAP, space‑matching Swoops, push chain)
+- Simulator: `src/sim/simulate.js` (same logic for headless runs)

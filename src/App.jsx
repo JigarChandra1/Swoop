@@ -14,6 +14,42 @@ const LANES = [
   {sum:12, L:3, basket:true},
 ];
 
+// Geometric Board Layout (documentation)
+// Two layers:
+// 1) Geometry "spaces" 1..11 per lane (may include gaps) used for alignment and space‑matching on Swoops.
+// 2) Movement "steps" are only real tiles (Normal/Checkpoint/Deterrent/Start/Final). Pieces occupy steps.
+//
+// TILE_MAP encodes tile type per (lane r, space 1..11). Helpers:
+//  - mapStepToGrid(r, step) → space (1..11) for a lane‑local movement step (1..L[r])
+//  - tileTypeAt / tileExistsAt  → tile info at that mapped space
+//  - stepForSpace(r, space) → best movement step for a given space (exact if possible; nearest valid otherwise)
+// Swoops: regular token Swoops space‑match across adjacent lanes via stepForSpace.
+// Push: if a pushed piece would land on a Gap, snap down to the nearest lower valid step; if none, remove.
+const MAX_STEP = 11;
+const TILE_MAP = [
+  ['Start','Gap','Gap','Gap','Gap','Checkpoint','Gap','Gap','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Gap','Gap','Checkpoint','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Deterrent','Gap','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Gap','Deterrent','Gap','Checkpoint','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Deterrent','Gap','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Final'],
+  ['Start','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Normal','Deterrent','Gap','Checkpoint','Final'],
+  ['Start','Gap','Checkpoint','Deterrent','Gap','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Gap','Deterrent','Gap','Checkpoint','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Deterrent','Gap','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Gap','Gap','Checkpoint','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Gap','Gap','Checkpoint','Gap','Gap','Gap','Gap','Final']
+];
+function mapStepToGrid(r, step){
+  const L = LANES[r].L;
+  if(L<=1) return 1;
+  return 1 + Math.round((step-1)*(MAX_STEP-1)/(L-1));
+}
+function tileTypeAt(r, step){
+  const gs = Math.max(1, Math.min(MAX_STEP, mapStepToGrid(r, step)));
+  return TILE_MAP[r][gs-1] || 'Gap';
+}
+function tileExistsAt(r, step){ return tileTypeAt(r, step) !== 'Gap'; }
+
 function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); out.push(L); return [...new Set(out)].filter(x=>x>=1&&x<=L); }
 function deterrents(L,sum){ if(L<=3) return []; const det=[3,L-2]; if((sum===6||sum===8)&&L>=5) det.push(5); const cps=checkpoints(L); return [...new Set(det)].filter(x=>x>=1&&x<=L && !cps.includes(x)); }
 const oddSlope={3:+1,5:-1,7:-1,9:-1,11:+1};
@@ -355,7 +391,7 @@ export default function App(){
     const L = LANES[pc.r].L;
     if(pc.step !== L) return false;
     const downStep = L - 1;
-    return downStep >= 1;
+    return downStep >= 1 && tileExistsAt(pc.r, downStep);
   }
 
   // Check if a piece at top step can do a free swoop
@@ -377,7 +413,7 @@ export default function App(){
       if(r2 < 0 || r2 >= LANES.length) continue;
 
       const step2 = LANES[r2].L;
-      targets.push({r: r2, step: step2});
+      if(tileExistsAt(r2, step2)) targets.push({r: r2, step: step2});
     }
     return targets;
   }
@@ -389,13 +425,13 @@ export default function App(){
 
     // Up
     const up = pc.step + 1;
-    if(up <= L){
+    if(up <= L && tileExistsAt(pc.r, up)){
       targets.push({r: pc.r, step: up});
     }
 
     // Down
     const down = pc.step - 1;
-    if(down >= 1){
+    if(down >= 1 && tileExistsAt(pc.r, down)){
       targets.push({r: pc.r, step: down});
     }
 
@@ -405,7 +441,7 @@ export default function App(){
         const r2 = pc.r + dr;
         if(r2 < 0 || r2 >= LANES.length) continue;
         const step2 = LANES[r2].L;
-        targets.push({r: r2, step: step2});
+        if(tileExistsAt(r2, step2)) targets.push({r: r2, step: step2});
       }
     }
     return targets;
@@ -584,7 +620,13 @@ export default function App(){
     newGame.baskets[r] = true;
   }
 
-  function applyPushChain(origin, dest, newGame){
+  // Push-chain helpers: snap‑down + basket transfer are handled in applyPushChain
+  function nearestValidStepDown(r, step){
+    let s = step;
+    while(s >= 1 && !tileExistsAt(r, s)) s--;
+    return s;
+  }
+  function applyPushChain(origin, dest, newGame, pusher){
     const dr = dest.r - origin.r;
     const ds = dest.step - origin.step;
     if(dr===0 && ds===0) return;
@@ -597,28 +639,31 @@ export default function App(){
     }
     if(!occPc) return;
     const r2 = dest.r + dr;
+    if(occPc.carrying && pusher && !pusher.carrying){
+      pusher.carrying = true; occPc.carrying = false;
+    }
     if(r2 < 0 || r2 >= LANES.length){
       // remove
       const pl = newGame.players[occPi];
       pl.pieces = pl.pieces.filter(p=>p!==occPc);
-      if(occPc.carrying) returnBasketToTop(dest.r, newGame);
       return;
     }
     const L2 = LANES[r2].L;
-    const s2 = dest.step + ds;
-    if(s2 < 1 || s2 > L2){
+    let s2 = dest.step + ds;
+    s2 = Math.max(1, Math.min(L2, s2));
+    s2 = nearestValidStepDown(r2, s2);
+    if(s2 < 1){
       const pl = newGame.players[occPi];
       pl.pieces = pl.pieces.filter(p=>p!==occPc);
-      if(occPc.carrying) returnBasketToTop(dest.r, newGame);
       return;
     }
-    applyPushChain(dest, {r:r2, step:s2}, newGame);
+    applyPushChain(dest, {r:r2, step:s2}, newGame, occPc);
     occPc.r = r2; occPc.step = s2;
   }
 
   function performMoveWithPush(pc, target, newGame){
     const origin = {r: pc.r, step: pc.step};
-    applyPushChain(origin, target, newGame);
+    applyPushChain(origin, target, newGame, pc);
     pc.r = target.r; pc.step = target.step;
     afterMovePickup(pc, newGame);
   }
@@ -714,7 +759,7 @@ export default function App(){
 
     for(const dr of [-1,+1]){
       const r2=r+dr; if(r2<0||r2>=LANES.length) continue;
-      let step2=pc.step;
+      let step2;
 
       if(atOddTop){
         // Special slope adjustment for pieces at L-1 on odd lanes
@@ -722,10 +767,13 @@ export default function App(){
       } else if(atTopStep){
         // Pieces at the top step can swoop to the top step of adjacent lanes
         step2=LANES[r2].L;
+      } else {
+        // Match by geometric space across lanes
+        const space = mapStepToGrid(r, pc.step);
+        step2 = stepForSpace(r2, space);
       }
 
-      step2=Math.min(LANES[r2].L, step2);
-    targets.push({r:r2, step:step2});
+      if(step2 && tileExistsAt(r2, step2)) targets.push({r:r2, step:step2});
     }
     return targets;
   }
@@ -1083,14 +1131,9 @@ export default function App(){
 
   function resolveDeterrents(pl, newGame){
     pl.pieces=pl.pieces.filter(pc=>{
-      const L=LANES[pc.r].L;
-      const sum=LANES[pc.r].sum;
-      const dets=deterrents(L,sum);
-      const onDet=dets.includes(pc.step);
+      const onDet = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
       if(onDet){
-        if(pc.carrying && LANES[pc.r].basket){
-          newGame.baskets[pc.r]=true;
-        }
+        if(pc.carrying && LANES[pc.r].basket){ newGame.baskets[pc.r]=true; }
         return false;
       }
       return true;
@@ -1122,13 +1165,8 @@ export default function App(){
         }
       } else {
         let dest=null;
-        for(const c of cps){
-          if(c<=pc.step) dest=c;
-        }
-        if(dest!==null){
-          pc.step=dest;
-          kept.push(pc);
-        }
+        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
+        if(dest!==null){ pc.step=dest; kept.push(pc); }
       }
     }
 
@@ -1165,34 +1203,22 @@ export default function App(){
     const kept=[];
 
     for(const pc of pl.pieces){
-      const L=LANES[pc.r].L;
-      const sum=LANES[pc.r].sum;
-      const cps=checkpoints(L);
-      const dets=deterrents(L,sum);
-      const onDet=dets.includes(pc.step);
-
+      const onDet = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
       if(onDet){
         if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
         continue;
       }
 
-      if(cps.includes(pc.step)){
+      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint'){
         kept.push(pc);
         continue;
       }
 
       let dest=null;
       if(pc.carrying){
-        for(const c of cps){
-          if(c>=pc.step){
-            dest=c;
-            break;
-          }
-        }
+        for(let s=pc.step; s<=LANES[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
       } else {
-        for(const c of cps){
-          if(c<=pc.step) dest=c;
-        }
+        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
       }
 
       if(dest===null){
@@ -1380,9 +1406,9 @@ export default function App(){
   }
 
   function getCellClasses(r, step) {
-    const lane = LANES[r];
-    const isCp = checkpoints(lane.L).includes(step);
-    const isDet = deterrents(lane.L, lane.sum).includes(step);
+    const tt = tileTypeAt(r, step);
+    const isCp = tt === 'Checkpoint';
+    const isDet = tt === 'Deterrent';
 
     let classes = "mobile-cell swoop-tile";
 
@@ -1491,11 +1517,10 @@ export default function App(){
       const step = L; // This is the final step
       const occ = pieceAt(r, step);
 
-      // Determine classes for the final step
-      const cps = checkpoints(L);
-      const dets = deterrents(L, lane.sum);
-      const isCp = cps.includes(step);
-      const isDet = dets.includes(step);
+      // Determine classes via tile map
+      const tt = tileTypeAt(r, step);
+      const isCp = tt === 'Checkpoint';
+      const isDet = tt === 'Deterrent';
 
       let classes = "mobile-cell swoop-tile swoop-center";
       if (isCp) classes += " swoop-cp";

@@ -42,6 +42,35 @@ function deterrents(L, sum) {
 
 const oddSlope = { 3: +1, 5: -1, 7: -1, 9: -1, 11: +1 };
 
+// Geometric Board Layout (documentation)
+// Geometry spaces (1..11) per lane can be gaps; movement steps are only on real tiles.
+// TILE_MAP is the source of truth for tile types by space; helper functions map between steps and spaces.
+// Swoops space‑match across adjacent lanes; pushes snap‑down into gaps and transfer baskets to the pusher.
+// Geometry map (11-step grid per lane)
+const MAX_STEP = 11;
+const TILE_MAP = [
+  ['Start','Gap','Gap','Gap','Gap','Checkpoint','Gap','Gap','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Gap','Gap','Checkpoint','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Deterrent','Gap','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Gap','Deterrent','Gap','Checkpoint','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Deterrent','Gap','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Final'],
+  ['Start','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Normal','Deterrent','Gap','Checkpoint','Final'],
+  ['Start','Gap','Checkpoint','Deterrent','Gap','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Gap','Deterrent','Gap','Checkpoint','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Deterrent','Gap','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Gap','Gap','Checkpoint','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Gap','Gap','Checkpoint','Gap','Gap','Gap','Gap','Final']
+];
+function mapStepToGrid(r, step){
+  const L = LANES[r].L; if(L<=1) return 1;
+  return 1 + Math.round((step-1)*(MAX_STEP-1)/(L-1));
+}
+function tileTypeAt(r, step){
+  const gs = Math.max(1, Math.min(MAX_STEP, mapStepToGrid(r, step)));
+  return TILE_MAP[r][gs-1] || 'Gap';
+}
+function tileExistsAt(r, step){ return tileTypeAt(r, step) !== 'Gap'; }
+
 // Add missing deterrents function from main game
 function deterrents(L, sum) {
   const det = [];
@@ -312,7 +341,7 @@ function potentialTopStepSwoops(game, pc) {
 
     // For top step free swoop, piece can go to top step of adjacent lanes
     const step2 = LANES[r2].L;
-    targets.push({ r: r2, step: step2 });
+    if (tileExistsAt(r2, step2)) targets.push({ r: r2, step: step2 });
   }
   return targets;
 }
@@ -324,13 +353,13 @@ function moveTargets(game, pc) {
 
   // Up
   const up = pc.step + 1;
-  if (up <= L) {
+  if (up <= L && tileExistsAt(pc.r, up)) {
     targets.push({ r: pc.r, step: up });
   }
 
   // Down
   const down = pc.step - 1;
-  if (down >= 1) {
+  if (down >= 1 && tileExistsAt(pc.r, down)) {
     targets.push({ r: pc.r, step: down });
   }
 
@@ -340,7 +369,7 @@ function moveTargets(game, pc) {
       const r2 = pc.r + dr;
       if (r2 < 0 || r2 >= LANES.length) continue;
       const step2 = LANES[r2].L;
-      targets.push({ r: r2, step: step2 });
+      if (tileExistsAt(r2, step2)) targets.push({ r: r2, step: step2 });
     }
   }
   return targets;
@@ -362,7 +391,7 @@ function returnBasketToTop(game, r){
   game.baskets[r] = true;
 }
 
-function applyPushChain(game, origin, dest){
+function applyPushChain(game, origin, dest, pusher){
   const dr = dest.r - origin.r;
   const ds = dest.step - origin.step;
   if(dr===0 && ds===0) return;
@@ -374,27 +403,29 @@ function applyPushChain(game, origin, dest){
   }
   if(!occPc) return;
   const r2 = dest.r + dr;
+  // Basket transfer on push
+  if(occPc.carrying && pusher && !pusher.carrying){ pusher.carrying = true; occPc.carrying = false; }
   if(r2 < 0 || r2 >= LANES.length){
     const owner = game.players[occPi];
     owner.pieces = owner.pieces.filter(p=>p!==occPc);
-    if(occPc.carrying) returnBasketToTop(game, dest.r);
     return;
   }
   const L2 = LANES[r2].L;
-  const s2 = dest.step + ds;
-  if(s2 < 1 || s2 > L2){
+  let s2 = dest.step + ds;
+  s2 = Math.max(1, Math.min(L2, s2));
+  s2 = (function(){ let x=s2; while(x>=1 && !tileExistsAt(r2,x)) x--; return x; })();
+  if(s2 < 1){
     const owner = game.players[occPi];
     owner.pieces = owner.pieces.filter(p=>p!==occPc);
-    if(occPc.carrying) returnBasketToTop(game, dest.r);
     return;
   }
-  applyPushChain(game, dest, { r: r2, step: s2 });
+  applyPushChain(game, dest, { r: r2, step: s2 }, occPc);
   occPc.r = r2; occPc.step = s2;
 }
 
 function performMoveWithPush(game, pc, target){
   const origin = { r: pc.r, step: pc.step };
-  applyPushChain(game, origin, target);
+  applyPushChain(game, origin, target, pc);
   pc.r = target.r; pc.step = target.step;
   afterMovePickup(game, pc);
 }
@@ -589,14 +620,8 @@ function anyActionForSum(game, pl, sum) {
 function resolveDeterrents(game, pl) {
   const kept = [];
   for (const pc of pl.pieces) {
-    const L = LANES[pc.r].L;
-    const sum = LANES[pc.r].sum;
-    const dets = deterrents(L, sum);
-    const onDet = dets.includes(pc.step);
-    if (onDet) {
-      if (pc.carrying && LANES[pc.r].basket) game.baskets[pc.r] = true; // return basket
-      continue; // removed
-    }
+    const onDet = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
+    if (onDet) { if (pc.carrying && LANES[pc.r].basket) game.baskets[pc.r] = true; continue; }
     kept.push(pc);
   }
   pl.pieces = kept;
@@ -609,8 +634,6 @@ function bank(game) {
 
   for (const pc of pl.pieces) {
     const L = LANES[pc.r].L;
-    const cps = checkpoints(L);
-
     // Pick up at top if possible before sliding
     if (pc.step === L && LANES[pc.r].basket && game.baskets[pc.r] && !pc.carrying) {
       pc.carrying = true;
@@ -625,12 +648,11 @@ function bank(game) {
       }
     } else {
       let dest = null;
-      for (const c of cps) if (c <= pc.step) dest = c;
+      for (let s = pc.step; s >= 1; s--) { if (tileTypeAt(pc.r, s) === 'Checkpoint') { dest = s; break; } }
       if (dest !== null) {
         pc.step = dest;
         kept.push(pc);
       }
-      // if dest is null, the piece falls off (removed)
     }
   }
 

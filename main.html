@@ -142,6 +142,50 @@ const oddSlope = {3:+1, 5:-1, 7:-1, 9:-1, 11:+1};
 const grid = document.getElementById('grid');
 const rows = lanes.length;
 const cols = 27;
+// --- Geometric Board Layout (documentation)
+// We model the board at two levels:
+// 1) Geometry "spaces": a fixed 11-slot vertical grid per lane (1..11) that may include gaps.
+//    This is used for visual alignment and for space-matching during cross‑lane Swoops.
+// 2) Movement "steps": only real tiles (Normal/Checkpoint/Deterrent/Start/Final). Pieces occupy steps.
+//
+// TILE_MAP encodes, for each route (2..12), the type of tile at each geometric space (1..11).
+// Mapping helpers:
+//  - mapStepToGrid(r, step)  → space(1..11) for the lane‑local movement step (1..L[r])
+//  - tileTypeAt(r, step)     → tile type at that mapped space
+//  - tileExistsAt(r, step)   → true if not Gap (i.e., a usable movement tile)
+//  - stepForSpace(r, space)  → best movement step on lane r for a given geometric space (exact if possible;
+//                               otherwise nearest lower/upper valid step), used for Swoop lane changes.
+//
+// Push and gaps:
+//  - If a pushed piece would land on a Gap space (within lane bounds), it snaps down (toward home) to the
+//    nearest lower movement step that exists; if none, it is removed. Basket transfers to the pusher.
+//  - This applies to every link of a push chain and to pushes caused by Swoops as well.
+// -----------------------------------------------------------------------------
+// Board geometry (grid 11 steps per lane)
+const MAX_STEP = 11;
+const TILE_MAP = [
+  ['Start','Gap','Gap','Gap','Gap','Checkpoint','Gap','Gap','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Gap','Gap','Checkpoint','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Deterrent','Gap','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Gap','Deterrent','Gap','Checkpoint','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Deterrent','Gap','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Final'],
+  ['Start','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Normal','Deterrent','Gap','Checkpoint','Final'],
+  ['Start','Gap','Checkpoint','Deterrent','Gap','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Gap','Deterrent','Gap','Checkpoint','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Deterrent','Gap','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Gap','Gap','Checkpoint','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Gap','Gap','Checkpoint','Gap','Gap','Gap','Gap','Final']
+];
+function mapStepToGrid(r, step){
+  const L = lanes[r].L;
+  if(L<=1) return 1;
+  return 1 + Math.round((step-1)*(MAX_STEP-1)/(L-1));
+}
+function tileTypeAt(r, step){
+  const gs = Math.max(1, Math.min(MAX_STEP, mapStepToGrid(r, step)));
+  return TILE_MAP[r][gs-1] || 'Gap';
+}
+function tileExistsAt(r, step){ return tileTypeAt(r, step) !== 'Gap'; }
 const centerCol = 13;
 const leftStartCol = 1;
 const rightEndCol = cols-2;
@@ -169,18 +213,26 @@ for(let r=0;r<rows;r++){
   // Set up steps 1..L-1 on shared (left) side
   for(let k=1;k<L;k++){
     const c=colForStepShared(k,L);
-    const el=cells[r][c]; el.classList.add('tile'); el.dataset.r=r; el.dataset.step=k;
-    if(cps.includes(k)) el.classList.add('cp');
-    if(dets.includes(k)) el.classList.add('det');
+    const el=cells[r][c];
+    if(tileExistsAt(r,k)){
+      el.classList.add('tile'); el.dataset.r=r; el.dataset.step=k;
+      const tt = tileTypeAt(r,k);
+      if(tt==='Checkpoint') el.classList.add('cp');
+      if(tt==='Deterrent') el.classList.add('det');
+    }
     const sl=document.createElement('small'); sl.textContent=k; el.appendChild(sl);
   }
 
   // Shared final step at center column
   const center=cells[r][centerCol];
-  center.classList.add('tile','center');
+  center.classList.add('center');
   center.dataset.r=r; center.dataset.step=L;
-  if(cps.includes(L)) center.classList.add('cp');
-  if(dets.includes(L)) center.classList.add('det');
+  if(tileExistsAt(r,L)){
+    center.classList.add('tile');
+    const ttF = tileTypeAt(r,L);
+    if(ttF==='Checkpoint') center.classList.add('cp');
+    if(ttF==='Deterrent') center.classList.add('det');
+  }
   const stepNum=document.createElement('small'); stepNum.textContent=L; center.appendChild(stepNum);
   if(lanes[r].basket){ const b=document.createElement('div'); b.className='piece basket'; b.textContent='🧺'; center.appendChild(b); }
 }
@@ -518,7 +570,7 @@ function potentialTopStepSwoops(pc){
     if(r2 < 0 || r2 >= lanes.length) continue;
 
     const step2 = lanes[r2].L;
-    targets.push({r: r2, step: step2});
+    if(tileExistsAt(r2, step2)) targets.push({r: r2, step: step2});
   }
   return targets;
 }
@@ -530,13 +582,13 @@ function getMoveTargets(pc){
 
   // Up
   const up = pc.step + 1;
-  if(up <= L){
+  if(up <= L && tileExistsAt(pc.r, up)){
     targets.push({r: pc.r, step: up});
   }
 
   // Down
   const down = pc.step - 1;
-  if(down >= 1){
+  if(down >= 1 && tileExistsAt(pc.r, down)){
     targets.push({r: pc.r, step: down});
   }
 
@@ -546,8 +598,8 @@ function getMoveTargets(pc){
       const r2 = pc.r + dr;
       if(r2 < 0 || r2 >= rows) continue;
       const step2 = lanes[r2].L;
-      targets.push({r: r2, step: step2});
-    }
+      if(tileExistsAt(r2, step2)) targets.push({r: r2, step: step2});
+  }
   }
   return targets;
 }
@@ -727,7 +779,19 @@ function returnBasketToTop(r){
 
 // Apply push chain from an approaching vector
 // origin: {r, step}, dest: {r, step}
-function applyPushChain(origin, dest){
+// Push rules summary:
+//  - Compute push vector from mover: (dr, ds) across lanes/steps.
+//  - If target tile is occupied, recursively push the occupant along (dr, ds).
+//  - Snap‑down: if the computed landing space is within the lane but maps to a Gap, drop to the nearest
+//    lower real step; remove if none. Apply at each link in the chain.
+//  - Basket transfer: if the pushed piece is carrying and the immediate pusher is not, transfer the basket
+//    to the pusher before moving it.
+function nearestValidStepDown(r, step){
+  let s = step;
+  while(s >= 1 && !tileExistsAt(r, s)) s--;
+  return s;
+}
+function applyPushChain(origin, dest, pusher){
   const dr = dest.r - origin.r;
   const ds = dest.step - origin.step;
   if(dr===0 && ds===0) return;
@@ -738,23 +802,35 @@ function applyPushChain(origin, dest){
 
   const r2 = dest.r + dr;
   const L2 = (r2>=0 && r2<lanes.length) ? lanes[r2].L : -1;
-  const s2 = dest.step + ds;
+  let s2 = dest.step + ds;
 
-  // if out of bounds, remove the piece; return basket if carrying
-  if(r2 < 0 || r2 >= lanes.length || s2 < 1 || s2 > L2){
+  // Basket transfer to pusher (if the pushed piece was carrying and pusher can take it)
+  if(occ.pc.carrying && pusher && !pusher.carrying){
+    pusher.carrying = true;
+    occ.pc.carrying = false;
+  }
+
+  // if out of bounds, remove the piece
+  if(r2 < 0 || r2 >= lanes.length){
     // remove occ.pc from players[occ.pi].pieces
     const owner = players[occ.pi];
     const idx = owner.pieces.indexOf(occ.pc);
     if(idx>=0) owner.pieces.splice(idx,1);
-    if(occ.pc.carrying){
-      // return basket to top
-      returnBasketToTop(dest.r);
-    }
     return;
   }
 
-  // recurse to push next occupant
-  applyPushChain(dest, {r:r2, step:s2});
+  // clamp and snap down to nearest valid tile
+  s2 = Math.max(1, Math.min(L2, s2));
+  s2 = nearestValidStepDown(r2, s2);
+  if(s2 < 1){
+    const owner = players[occ.pi];
+    const idx = owner.pieces.indexOf(occ.pc);
+    if(idx>=0) owner.pieces.splice(idx,1);
+    return;
+  }
+
+  // recurse to push next occupant, with current occupant as pusher
+  applyPushChain(dest, {r:r2, step:s2}, occ.pc);
 
   // after clearing next spot, move this occupant forward
   occ.pc.r = r2;
@@ -765,7 +841,7 @@ function applyPushChain(origin, dest){
 function performMoveWithPush(pc, target){
   const origin = {r: pc.r, step: pc.step};
   // resolve chain pushes at target
-  applyPushChain(origin, target);
+  applyPushChain(origin, target, pc);
   // move the moving piece
   pc.r = target.r;
   pc.step = target.step;
@@ -1063,7 +1139,7 @@ function potentialSwoops(pc){
 
   for(const dr of [-1,+1]){
     const r2=r+dr; if(r2<0||r2>=rows) continue;
-    let step2 = pc.step;
+    let step2;
 
     if(atOddTop){
       // Special slope adjustment for pieces at L-1 on odd lanes
@@ -1071,10 +1147,13 @@ function potentialSwoops(pc){
     } else if(atTopStep){
       // Pieces at the top step can swoop to the top step of adjacent lanes
       step2 = lanes[r2].L;
+    } else {
+      // Match by geometric space across lanes
+      const space = mapStepToGrid(r, pc.step);
+      step2 = stepForSpace(r2, space);
     }
 
-    step2 = Math.min(lanes[r2].L, step2);
-    targets.push({r:r2, step:step2});
+    if(step2 && tileExistsAt(r2, step2)) targets.push({r:r2, step:step2});
   }
   return targets;
 }
@@ -1347,13 +1426,12 @@ function bust(){
   const pl = players[current];
   const kept=[];
   for(const pc of pl.pieces){
-    const L=lanes[pc.r].L; const sum=lanes[pc.r].sum;
-    const cps = checkpoints(L); const dets = deterrents(L,sum);
-    const onDet = dets.includes(pc.step);
-    if(onDet || cps.includes(pc.step)){ kept.push(pc); continue; }
+    const onDet = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
+    const onCp = (tileTypeAt(pc.r, pc.step) === 'Checkpoint');
+    if(onDet || onCp){ kept.push(pc); continue; }
     let dest = null;
-    if(pc.carrying){ for(const c of cps){ if(c>=pc.step){ dest=c; break; } } }
-    else { for(const c of cps){ if(c<=pc.step) dest=c; } }
+    if(pc.carrying){ for(let s=pc.step; s<=lanes[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } } }
+    else { for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } } }
     if(dest===null){
       if(pc.carrying && lanes[pc.r].basket){
         const ce=cells[pc.r][centerCol];
