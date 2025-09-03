@@ -713,6 +713,12 @@ export default function App(){
           tailwindSpawn(r);
         }
       }
+    } else if (game.mode === 'tailwindChooseSwoop') {
+      // Click on a destination tile for tailwind swoop
+      const target = game.tailwindSwoopTargets && game.tailwindSwoopTargets.find(t => t.r === r && t.step === step);
+      if (target && game.tailwindPiece && game.tailwindPiece.side === side) {
+        handleTailwindSwoopChoice(target);
+      }
     }
   }
 
@@ -725,8 +731,30 @@ export default function App(){
 
     // Handle advancement beyond final step
     if (ns > L) {
-      // Non-carrying piece advancing beyond final step - remove from board
-      if (!piece.carrying) {
+      // Non-carrying piece at top step - give player choice between swoop and move down
+      if (!piece.carrying && piece.step === L) {
+        const canMoveDown = canTopStepMoveDown(piece);
+        const canSwoop = canTopStepFreeSwoop(piece);
+
+        if (canMoveDown || canSwoop) {
+          // Set up choice mode for tailwind top step options
+          const options = [];
+          if (canMoveDown) options.push('move_down');
+          if (canSwoop) options.push('swoop');
+
+          newGame.mode = 'tailwindTopStepChoice';
+          newGame.tailwindPiece = piece;
+          newGame.tailwindOptions = options;
+          newGame.message = `${opp.name}: Choose action for piece at top step - ${options.join(' or ')}.`;
+          setGame(newGame);
+          return;
+        } else {
+          // No options available, remove piece
+          const index = opp.pieces.indexOf(piece);
+          if (index > -1) opp.pieces.splice(index, 1);
+        }
+      } else if (!piece.carrying) {
+        // Non-carrying piece advancing beyond final step - remove from board
         const index = opp.pieces.indexOf(piece);
         if (index > -1) opp.pieces.splice(index, 1);
       }
@@ -753,6 +781,85 @@ export default function App(){
     gameState.mode='preroll';
     gameState.message=`${gameState.players[gameState.current].name}: Roll or Bank.`;
     setGame(gameState);
+  }
+
+  function handleTailwindTopStepChoice(action){
+    if(game.mode !== 'tailwindTopStepChoice' || !game.tailwindPiece) return;
+
+    const newGame = {...game};
+    const piece = game.tailwindPiece;
+    const opp = newGame.players[1 - newGame.current];
+
+    // Find the actual piece in the opponent's pieces array
+    const actualPiece = opp.pieces.find(p =>
+      p.r === piece.r && p.step === piece.step && p.side === piece.side
+    );
+
+    if (!actualPiece) {
+      finishTailwind(newGame);
+      return;
+    }
+
+    if (action === 'move_down') {
+      const L = LANES[actualPiece.r].L;
+      const downStep = L - 1;
+      if (downStep >= 1 && !occupied(actualPiece.r, actualPiece.side, downStep)) {
+        actualPiece.step = downStep;
+        afterMovePickup(actualPiece, newGame);
+        showToast(`Moved down to step ${downStep}`);
+      }
+    } else if (action === 'swoop') {
+      const targets = potentialTopStepSwoops(actualPiece);
+      if (targets.length === 1) {
+        // Auto-select single target
+        const target = targets[0];
+        actualPiece.r = target.r;
+        actualPiece.step = target.step;
+        afterMovePickup(actualPiece, newGame);
+        showToast(`Swooped to lane ${LANES[target.r].sum}!`);
+      } else if (targets.length > 1) {
+        // Let player choose swoop target
+        newGame.mode = 'tailwindChooseSwoop';
+        newGame.tailwindSwoopTargets = targets;
+        newGame.message = `${opp.name}: Choose swoop destination.`;
+        setGame(newGame);
+        return;
+      }
+    }
+
+    // Clear tailwind state and finish
+    newGame.mode = null;
+    newGame.tailwindPiece = null;
+    newGame.tailwindOptions = null;
+    newGame.tailwindSwoopTargets = null;
+    finishTailwind(newGame);
+  }
+
+  function handleTailwindSwoopChoice(target){
+    if(game.mode !== 'tailwindChooseSwoop' || !game.tailwindPiece) return;
+
+    const newGame = {...game};
+    const piece = game.tailwindPiece;
+    const opp = newGame.players[1 - newGame.current];
+
+    // Find the actual piece in the opponent's pieces array
+    const actualPiece = opp.pieces.find(p =>
+      p.r === piece.r && p.step === piece.step && p.side === piece.side
+    );
+
+    if (actualPiece) {
+      actualPiece.r = target.r;
+      actualPiece.step = target.step;
+      afterMovePickup(actualPiece, newGame);
+      showToast(`Swooped to lane ${LANES[target.r].sum}!`);
+    }
+
+    // Clear tailwind state and finish
+    newGame.mode = null;
+    newGame.tailwindPiece = null;
+    newGame.tailwindOptions = null;
+    newGame.tailwindSwoopTargets = null;
+    finishTailwind(newGame);
   }
 
   // Check if tailwind has any available actions
@@ -1200,6 +1307,12 @@ export default function App(){
       }
     }
 
+    // Highlight tailwind swoop destinations
+    if (game.mode === 'tailwindChooseSwoop' && game.tailwindSwoopTargets && game.tailwindPiece) {
+      return game.tailwindSwoopTargets.some(t => t.r === r && t.step === step) &&
+             game.tailwindPiece.side === side;
+    }
+
     return false;
   }
 
@@ -1478,6 +1591,31 @@ export default function App(){
               })()}
             </button>
           </div>
+
+          {/* Tailwind Choice Buttons */}
+          {game.mode === 'tailwindTopStepChoice' && game.tailwindOptions && (
+            <div className="mobile-tailwind-choice">
+              <div className="mobile-choice-title">Choose action for top step piece:</div>
+              <div className="mobile-choice-buttons">
+                {game.tailwindOptions.includes('move_down') && (
+                  <button
+                    className="mobile-button primary"
+                    onClick={() => handleTailwindTopStepChoice('move_down')}
+                  >
+                    ⬇️ Move Down
+                  </button>
+                )}
+                {game.tailwindOptions.includes('swoop') && (
+                  <button
+                    className="mobile-button primary"
+                    onClick={() => handleTailwindTopStepChoice('swoop')}
+                  >
+                    🔄 Swoop
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Dice and Pairs - Mobile Layout */}
           {game.rolled && (
