@@ -126,54 +126,67 @@ function ensurePieceForSum(game, pl, sum) {
   const side = pl.side;
 
   if (piecesOnRoute.length > 0) {
-    // Prioritize active pieces that can move, then inactive pieces that can be activated
-    const activePieces = piecesOnRoute.filter(p => p.active);
-    const inactivePieces = piecesOnRoute.filter(p => !p.active);
+    // Get all viable pieces (active pieces that can move + inactive pieces that can be activated and move)
+    const viablePieces = [];
 
-    // First, try to find an active piece that can move (up or down, or sideways at top)
+    // Check active pieces that can move
+    const activePieces = piecesOnRoute.filter(p => p.active);
     for (const pc of activePieces) {
       const L = LANES[pc.r].L;
+      if (pc.step === L) {
+        // Top step pieces can always be "activated" (even if already active)
+        viablePieces.push(pc);
+      } else {
+        const targets = moveTargets(game, pc);
+        if (targets.length > 0) {
+          viablePieces.push(pc);
+        }
+      }
+    }
 
-      // Special handling for pieces at top step
+    // Check inactive pieces that can be activated (if under the 2-piece limit)
+    if (activeCount(pl) < 2) {
+      const inactivePieces = piecesOnRoute.filter(p => !p.active);
+      for (const pc of inactivePieces) {
+        const L = LANES[pc.r].L;
+        if (pc.step === L) {
+          // Top step pieces can always be activated
+          viablePieces.push(pc);
+        } else {
+          const targets = moveTargets(game, pc);
+          if (targets.length > 0) {
+            viablePieces.push(pc);
+          }
+        }
+      }
+    }
+
+    // If multiple viable pieces, choose using heuristic
+    if (viablePieces.length > 1) {
+      return chooseBestPiece(viablePieces);
+    } else if (viablePieces.length === 1) {
+      const pc = viablePieces[0];
+      const L = LANES[pc.r].L;
+
       if (pc.step === L) {
         return ensureTopStepPiece(game, pl, pc);
       }
 
-      // Check if this active piece can move (either direction)
-      const targets = moveTargets(game, pc);
-      if (targets.length > 0) {
-        return pc; // This active piece can move
+      // Activate if not already active
+      if (!pc.active && activeCount(pl) < 2) {
+        pc.active = true;
+        // Log piece activation
+        game.moveHistory.push({
+          type: 'activate',
+          player: game.current,
+          piece: { r: pc.r, step: pc.step },
+          turn: game.moveHistory.filter(m => m.type === 'turn_start').length
+        });
       }
+      return pc;
     }
 
-    // If no active piece can move, try to activate an inactive piece that can move
-    if (activeCount(pl) < 2) {
-      for (const pc of inactivePieces) {
-        const L = LANES[pc.r].L;
-
-        // Special handling for pieces at top step
-        if (pc.step === L) {
-          return ensureTopStepPiece(game, pl, pc);
-        }
-
-        // Check if this piece can move after activation (either direction)
-        const targets = moveTargets(game, pc);
-        if (targets.length > 0) {
-          // Activate this piece
-          pc.active = true;
-          // Log piece activation
-          game.moveHistory.push({
-            type: 'activate',
-            player: game.current,
-            piece: { r: pc.r, step: pc.step },
-            turn: game.moveHistory.filter(m => m.type === 'turn_start').length
-          });
-          return pc;
-        }
-      }
-    }
-
-    // If we get here, no piece on the route can move
+    // No viable pieces
     return null;
   }
 
@@ -191,6 +204,21 @@ function ensurePieceForSum(game, pl, sum) {
     turn: game.moveHistory.filter(m => m.type === 'turn_start').length
   });
   return pc;
+}
+
+// Choose the best piece from multiple viable options using heuristic
+function chooseBestPiece(viablePieces) {
+  // Prioritize pieces that are already active
+  const activePieces = viablePieces.filter(p => p.active);
+  if (activePieces.length > 0) {
+    // Among active pieces, prefer those closer to the top (higher step)
+    activePieces.sort((a, b) => b.step - a.step);
+    return activePieces[0];
+  }
+
+  // If no active pieces, choose inactive piece closest to top
+  viablePieces.sort((a, b) => b.step - a.step);
+  return viablePieces[0];
 }
 
 // Handle pieces at top step with multiple options

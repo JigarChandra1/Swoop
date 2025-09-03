@@ -54,7 +54,9 @@ function initialGame(){
     baskets: LANES.map(l=>l.basket),
     message:'Monkeys, roll the dice!',
     transferSource: null,
-    transferTargets: null
+    transferTargets: null,
+    pieceChoices: null,
+    selectedSum: null
   };
 }
 
@@ -407,44 +409,60 @@ export default function App(){
     const side=(pl===game.players[0])?'L':'R';
 
     if(piecesOnRoute.length > 0){
-      // Prioritize active pieces that can move, then inactive pieces that can be activated
-      const activePieces = piecesOnRoute.filter(p => p.active);
-      const inactivePieces = piecesOnRoute.filter(p => !p.active);
+      // Get all viable pieces (active pieces that can move + inactive pieces that can be activated and move)
+      const viablePieces = [];
 
-      // First, try to find an active piece that can move (up or down, or sideways at top)
+      // Check active pieces that can move
+      const activePieces = piecesOnRoute.filter(p => p.active);
       for(const pc of activePieces){
+        const L = LANES[pc.r].L;
+        if(pc.step === L){
+          // Top step pieces can always be "activated" (even if already active)
+          viablePieces.push(pc);
+        } else {
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0){
+            viablePieces.push(pc);
+          }
+        }
+      }
+
+      // Check inactive pieces that can be activated (if under the 2-piece limit)
+      if(activeCount(pl) < 2){
+        const inactivePieces = piecesOnRoute.filter(p => !p.active);
+        for(const pc of inactivePieces){
+          const L = LANES[pc.r].L;
+          if(pc.step === L){
+            // Top step pieces can always be activated
+            viablePieces.push(pc);
+          } else {
+            const targets = getMoveTargets(pc);
+            if(targets.length > 0){
+              viablePieces.push(pc);
+            }
+          }
+        }
+      }
+
+      // If multiple viable pieces, let player choose
+      if(viablePieces.length > 1){
+        return 'CHOOSE_PIECE'; // Special return value to trigger piece selection
+      } else if(viablePieces.length === 1){
+        const pc = viablePieces[0];
         const L = LANES[pc.r].L;
 
         if(pc.step === L){
           return ensureTopStepPiece(pl, pc);
         }
 
-        const targets = getMoveTargets(pc);
-        if(targets.length > 0){
-          return pc; // This active piece can move
+        // Activate if not already active
+        if(!pc.active && activeCount(pl) < 2){
+          pc.active = true;
         }
+        return pc;
       }
 
-      // If no active piece can move, try to activate an inactive piece that can move
-      if(activeCount(pl) < 2){
-        for(const pc of inactivePieces){
-          const L = LANES[pc.r].L;
-
-          // Special handling for pieces at top step
-          if(pc.step === L){
-            return ensureTopStepPiece(pl, pc);
-          }
-
-          const targets = getMoveTargets(pc);
-          if(targets.length > 0){
-            // Activate this piece
-            pc.active = true;
-            return pc;
-          }
-        }
-      }
-
-      // If we get here, no piece on the route can move
+      // No viable pieces
       return null;
     }
 
@@ -454,6 +472,49 @@ export default function App(){
     const pc={r, side, step:1, carrying:false, active:true};
     pl.pieces.push(pc);
     return pc;
+  }
+
+  // Get all viable pieces for a sum (used for piece selection UI)
+  function getViablePiecesForSum(pl, sum){
+    const r=LANES.findIndex(x=>x.sum===sum);
+    if(r < 0) return [];
+
+    const piecesOnRoute = pl.pieces.filter(p => p.r === r);
+    const viablePieces = [];
+
+    // Check active pieces that can move
+    const activePieces = piecesOnRoute.filter(p => p.active);
+    for(const pc of activePieces){
+      const L = LANES[pc.r].L;
+      if(pc.step === L){
+        // Top step pieces can always be "activated" (even if already active)
+        viablePieces.push(pc);
+      } else {
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0){
+          viablePieces.push(pc);
+        }
+      }
+    }
+
+    // Check inactive pieces that can be activated (if under the 2-piece limit)
+    if(activeCount(pl) < 2){
+      const inactivePieces = piecesOnRoute.filter(p => !p.active);
+      for(const pc of inactivePieces){
+        const L = LANES[pc.r].L;
+        if(pc.step === L){
+          // Top step pieces can always be activated
+          viablePieces.push(pc);
+        } else {
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0){
+            viablePieces.push(pc);
+          }
+        }
+      }
+    }
+
+    return viablePieces;
   }
 
   // Handle pieces at top step with multiple options
@@ -518,6 +579,21 @@ export default function App(){
 
     const before=pl.pieces.length;
     const pc=ensurePieceForSum(pl,sum);
+
+    // Check if we need to let the player choose which piece to use
+    if(pc === 'CHOOSE_PIECE'){
+      const viablePieces = getViablePiecesForSum(pl, sum);
+      const updatedGame = {
+        ...newGame,
+        mode: 'choosePiece',
+        pieceChoices: viablePieces,
+        selectedSum: sum
+      };
+      updatedGame.message = `${pl.name}: Choose which piece to activate/move.`;
+      setGame(updatedGame);
+      return;
+    }
+
     if(!pc) return;
 
     if(pl.pieces.length>before){
@@ -653,8 +729,85 @@ export default function App(){
     setGame(newGame);
   }
 
+  function selectPieceForMove(selectedPiece){
+    if(game.mode !== 'choosePiece' || !game.pieceChoices || !game.selectedSum) return;
+
+    const newGame = {...game};
+    const pl = newGame.players[newGame.current];
+    const sum = game.selectedSum;
+
+    // Find the actual piece in the player's pieces array
+    const pc = pl.pieces.find(p =>
+      p.r === selectedPiece.r &&
+      p.step === selectedPiece.step &&
+      p.side === selectedPiece.side
+    );
+
+    if(!pc) return;
+
+    const L = LANES[pc.r].L;
+
+    // Handle top step pieces
+    if(pc.step === L){
+      if(!pc.active && activeCount(pl) < 2){
+        pc.active = true;
+      }
+      // Continue with normal flow for top step pieces
+    } else {
+      // Activate if not already active
+      if(!pc.active && activeCount(pl) < 2){
+        pc.active = true;
+      }
+    }
+
+    // Clear piece selection state
+    newGame.mode = 'pairChosen';
+    newGame.pieceChoices = null;
+    newGame.selectedSum = null;
+
+    // Now proceed with movement logic
+    const targets = getMoveTargets(pc);
+    if(targets.length === 0){
+      // No movement possible (maybe just activated)
+      newGame.rolled = null;
+      newGame.selectedPair = null;
+      newGame.mode = 'preroll';
+      newGame.message = `${pl.name}: Roll or Bank.`;
+      setGame(newGame);
+    } else if(targets.length === 1){
+      // Auto-apply single move
+      const target = targets[0];
+      pc.r = target.r;
+      pc.step = target.step;
+      afterMovePickup(pc, newGame);
+
+      newGame.rolled = null;
+      newGame.selectedPair = null;
+      newGame.mode = 'preroll';
+      newGame.message = `${pl.name}: Roll or Bank.`;
+      setGame(newGame);
+    } else {
+      // Multiple choices — let user select destination (up/down/sideways)
+      newGame.mode = 'chooseMoveDest';
+      newGame.movePiece = pc;
+      newGame.moveTargets = targets;
+      newGame.message = `${pl.name}: Choose Up, Down, or Sideways.`;
+      setGame(newGame);
+    }
+  }
+
   function handleTileClick(r, side, step, occ) {
-    if (game.mode === 'chooseSwoop') {
+    if (game.mode === 'choosePiece') {
+      // Click on a piece to select it for movement
+      if (occ && occ.pi === game.current && game.pieceChoices) {
+        const selectedPiece = game.pieceChoices.find(p =>
+          p.r === r && p.step === step && p.side === side
+        );
+        if (selectedPiece) {
+          selectPieceForMove(selectedPiece);
+        }
+      }
+    } else if (game.mode === 'chooseSwoop') {
       // Click on a piece to select it for swooping
       if (occ && occ.pi === game.current && occ.pc.active) {
         chooseSwoopPiece(occ.pc);
@@ -1233,6 +1386,11 @@ export default function App(){
   }
 
   function shouldHighlightTile(r, side, step) {
+    // Highlight pieces available for selection
+    if (game.mode === 'choosePiece' && game.pieceChoices) {
+      return game.pieceChoices.some(p => p.r === r && p.side === side && p.step === step);
+    }
+
     // Highlight eligible pieces for swoop selection
     if (game.mode === 'chooseSwoop' && game.selectedPair) {
       const selectedSum = game.selectedPair.sum;
