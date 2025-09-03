@@ -44,8 +44,8 @@ function colForStep(side, step, L) {
 function initialGame(){
   return {
     players:[
-      {name:'Monkeys', pieceIcon:'🐒', activeIcon:'🐵', score:0, pieces:[]},
-      {name:'Seagulls', pieceIcon:'🕊️', activeIcon:'🦅', score:0, pieces:[]}
+      {name:'Monkeys', pieceIcon:'🐒', activeIcon:'🐵', score:0, swoopTokens:0, pieces:[]},
+      {name:'Seagulls', pieceIcon:'🕊️', activeIcon:'🦅', score:0, swoopTokens:1, pieces:[]}
     ],
     current:0,
     rolled:null,
@@ -84,18 +84,10 @@ export default function App(){
     return false;
   }
 
-  function canSwoopThisRoll(){
-    if(!(game.mode==='pairChosen' && game.selectedPair)) return false;
+  function canSwoopNow(){
     const pl=game.players[game.current];
-    const selectedSum = game.selectedPair.sum;
-    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
-
-    // Only pieces on lanes adjacent to the selected sum can swoop
-    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
-    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
-
-    const eligiblePieces = pl.pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
-    for(const pc of eligiblePieces){ if(potentialSwoops(pc).length>0) return true; }
+    if(!(pl.swoopTokens>0)) return false;
+    for(const pc of pl.pieces){ if(pc.active && potentialSwoops(pc).length>0) return true; }
     return false;
   }
 
@@ -109,7 +101,7 @@ export default function App(){
       return existsAnyMoveThisRoll();
     }
     // For pairChosen mode, check if the selected pair can move or swoop
-    return existsAnyMoveThisRoll() || canSwoopThisRoll();
+    return existsAnyMoveThisRoll() || canSwoopNow();
   }
 
   // Transfer functionality
@@ -204,16 +196,11 @@ export default function App(){
       newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
     } else if(previousMode === 'pairChosen'){
       const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
-      const canSwoop = canSwoopThisRoll();
-      if(canMove && canSwoop) {
-        newGame.message = `${pl.name}: Move or Swoop.`;
-      } else if(canMove) {
-        newGame.message = `${pl.name}: Move.`;
-      } else if(canSwoop) {
-        newGame.message = `${pl.name}: Swoop (optional) or Bank/Bust.`;
-      } else {
-        newGame.message = `${pl.name}: End Turn (Busted).`;
-      }
+      const canSwoop = canSwoopNow();
+      if(canMove && canSwoop) newGame.message = `${pl.name}: Move or spend a Swoop token.`;
+      else if(canMove) newGame.message = `${pl.name}: Move.`;
+      else if(canSwoop) newGame.message = `${pl.name}: Spend a Swoop token (optional) or End Turn (Busted).`;
+      else newGame.message = `${pl.name}: End Turn (Busted).`;
     } else {
       // For other modes, use a generic message
       newGame.message = `${pl.name}: Continue your turn.`;
@@ -239,16 +226,11 @@ export default function App(){
       newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
     } else if(previousMode === 'pairChosen'){
       const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
-      const canSwoop = canSwoopThisRoll();
-      if(canMove && canSwoop) {
-        newGame.message = `${pl.name}: Move or Swoop.`;
-      } else if(canMove) {
-        newGame.message = `${pl.name}: Move.`;
-      } else if(canSwoop) {
-        newGame.message = `${pl.name}: Swoop (optional) or Bank/Bust.`;
-      } else {
-        newGame.message = `${pl.name}: End Turn (Busted).`;
-      }
+      const canSwoop = canSwoopNow();
+      if(canMove && canSwoop) newGame.message = `${pl.name}: Move or spend a Swoop token.`;
+      else if(canMove) newGame.message = `${pl.name}: Move.`;
+      else if(canSwoop) newGame.message = `${pl.name}: Spend a Swoop token (optional) or End Turn (Busted).`;
+      else newGame.message = `${pl.name}: End Turn (Busted).`;
     } else {
       newGame.message = `${pl.name}: Continue your turn.`;
     }
@@ -256,20 +238,10 @@ export default function App(){
     setGame(newGame);
   }
 
-  function occupied(r,side,step){
-    // For the final step (merged step), allow both sides to occupy it
-    const L = LANES[r].L;
-    if (step === L) {
-      // Check if the same side already has a piece on the final step
-      for(const pl of game.players){
-        if(pl.pieces.some(pc=>pc.r===r && pc.side===side && pc.step===step)) return true;
-      }
-      return false;
-    }
-
-    // For non-final steps, use original logic
+  function occupied(r, step){
+    // Shared-lane occupancy across both players
     for(const pl of game.players){
-      if(pl.pieces.some(pc=>pc.r===r && pc.side===side && pc.step===step)) return true;
+      if(pl.pieces.some(pc=>pc.r===r && pc.step===step)) return true;
     }
     return false;
   }
@@ -293,9 +265,9 @@ export default function App(){
     }
 
     if(!hasAnyMove){
-      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — select a pair to Swoop (optional) or End Turn (Busted).`;
+      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — select a pair to Move, or spend a Swoop token, or End Turn (Busted).`;
     } else {
-      newGame.message = `${game.players[game.current].name}: select a pair, then Move or Swoop.`;
+      newGame.message = `${game.players[game.current].name}: select a pair to Move, or spend a Swoop token.`;
     }
 
     setGame(newGame);
@@ -313,24 +285,11 @@ export default function App(){
     newGame.swoopTargets = null;
 
     const canMove = canMoveOnSum(game.players[game.current], pair.sum);
-
-    // Recalculate canSwoop with the new pair selection
-    const selectedSum = pair.sum;
-    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
-    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
-    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
-    const eligiblePieces = game.players[game.current].pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
-    const canSwoop = eligiblePieces.some(pc => potentialSwoops(pc).length > 0);
-
-    if(canMove && canSwoop) {
-      newGame.message = `${game.players[game.current].name}: Move or Swoop.`;
-    } else if(canMove) {
-      newGame.message = `${game.players[game.current].name}: Move.`;
-    } else if(canSwoop) {
-      newGame.message = `${game.players[game.current].name}: Swoop (optional) or Bank/Bust.`;
-    } else {
-      newGame.message = `${game.players[game.current].name}: End Turn (Busted).`;
-    }
+    const canSwoop = canSwoopNow();
+    if(canMove && canSwoop) newGame.message = `${game.players[game.current].name}: Move or spend a Swoop token.`;
+    else if(canMove) newGame.message = `${game.players[game.current].name}: Move.`;
+    else if(canSwoop) newGame.message = `${game.players[game.current].name}: Spend a Swoop token (optional) or End Turn (Busted).`;
+    else newGame.message = `${game.players[game.current].name}: End Turn (Busted).`;
 
     setGame(newGame);
   }
@@ -382,8 +341,7 @@ export default function App(){
       return false;
     } else {
       // No pieces on route - check if we can spawn a new piece
-      const side=(pl===game.players[0])?'L':'R';
-      return (pl.pieces.length<5 && !occupied(r, side, 1) && activeCount(pl)<2);
+      return (pl.pieces.length<5 && !occupied(r, 1) && activeCount(pl)<2);
     }
   }
 
@@ -397,7 +355,7 @@ export default function App(){
     const L = LANES[pc.r].L;
     if(pc.step !== L) return false;
     const downStep = L - 1;
-    return downStep >= 1 && !occupied(pc.r, pc.side, downStep);
+    return downStep >= 1;
   }
 
   // Check if a piece at top step can do a free swoop
@@ -419,9 +377,7 @@ export default function App(){
       if(r2 < 0 || r2 >= LANES.length) continue;
 
       const step2 = LANES[r2].L;
-      if(!occupied(r2, pc.side, step2)){
-        targets.push({r: r2, step: step2});
-      }
+      targets.push({r: r2, step: step2});
     }
     return targets;
   }
@@ -433,13 +389,13 @@ export default function App(){
 
     // Up
     const up = pc.step + 1;
-    if(up <= L && !occupied(pc.r, pc.side, up)){
+    if(up <= L){
       targets.push({r: pc.r, step: up});
     }
 
     // Down
     const down = pc.step - 1;
-    if(down >= 1 && !occupied(pc.r, pc.side, down)){
+    if(down >= 1){
       targets.push({r: pc.r, step: down});
     }
 
@@ -449,9 +405,7 @@ export default function App(){
         const r2 = pc.r + dr;
         if(r2 < 0 || r2 >= LANES.length) continue;
         const step2 = LANES[r2].L;
-        if(!occupied(r2, pc.side, step2)){
-          targets.push({r: r2, step: step2});
-        }
+        targets.push({r: r2, step: step2});
       }
     }
     return targets;
@@ -462,7 +416,6 @@ export default function App(){
 
     // Get all pieces on this route
     const piecesOnRoute = pl.pieces.filter(p => p.r === r);
-    const side=(pl===game.players[0])?'L':'R';
 
     if(piecesOnRoute.length > 0){
       // Get all viable pieces (active pieces that can move + inactive pieces that can be activated and move)
@@ -524,8 +477,8 @@ export default function App(){
 
     // No pieces on route - try to spawn a new piece
     if(pl.pieces.length>=5 || activeCount(pl)>=2) return null;
-    if(occupied(r,side,1)) return null;
-    const pc={r, side, step:1, carrying:false, active:true};
+    if(occupied(r,1)) return null;
+    const pc={r, step:1, carrying:false, active:true};
     pl.pieces.push(pc);
     return pc;
   }
@@ -626,6 +579,50 @@ export default function App(){
     return false;
   }
 
+  function returnBasketToTop(r, newGame){
+    if(!LANES[r].basket) return;
+    newGame.baskets[r] = true;
+  }
+
+  function applyPushChain(origin, dest, newGame){
+    const dr = dest.r - origin.r;
+    const ds = dest.step - origin.step;
+    if(dr===0 && ds===0) return;
+    // find occupant at dest
+    let occPi = -1, occPc = null;
+    for(let pi=0; pi<newGame.players.length; pi++){
+      const pl = newGame.players[pi];
+      const pc = pl.pieces.find(p=>p.r===dest.r && p.step===dest.step);
+      if(pc){ occPi = pi; occPc = pc; break; }
+    }
+    if(!occPc) return;
+    const r2 = dest.r + dr;
+    if(r2 < 0 || r2 >= LANES.length){
+      // remove
+      const pl = newGame.players[occPi];
+      pl.pieces = pl.pieces.filter(p=>p!==occPc);
+      if(occPc.carrying) returnBasketToTop(dest.r, newGame);
+      return;
+    }
+    const L2 = LANES[r2].L;
+    const s2 = dest.step + ds;
+    if(s2 < 1 || s2 > L2){
+      const pl = newGame.players[occPi];
+      pl.pieces = pl.pieces.filter(p=>p!==occPc);
+      if(occPc.carrying) returnBasketToTop(dest.r, newGame);
+      return;
+    }
+    applyPushChain(dest, {r:r2, step:s2}, newGame);
+    occPc.r = r2; occPc.step = s2;
+  }
+
+  function performMoveWithPush(pc, target, newGame){
+    const origin = {r: pc.r, step: pc.step};
+    applyPushChain(origin, target, newGame);
+    pc.r = target.r; pc.step = target.step;
+    afterMovePickup(pc, newGame);
+  }
+
   function useMove(){
     if(!(game.mode==='pairChosen' && game.selectedPair)) return;
     const newGame = {...game};
@@ -662,9 +659,7 @@ export default function App(){
       } else if(targets.length === 1){
         // Auto-apply single move
         const target = targets[0];
-        pc.r = target.r;
-        pc.step = target.step;
-        afterMovePickup(pc, newGame);
+        performMoveWithPush(pc, target, newGame);
       } else {
         // Multiple choices — let user select destination (up/down/sideways)
         const updatedGame = {
@@ -694,7 +689,7 @@ export default function App(){
 
     // Find the piece in the current player's pieces and update it
     const pl = newGame.players[newGame.current];
-    const actualPiece = pl.pieces.find(p => p.r === pc.r && p.step === pc.step && p.side === pc.side);
+    const actualPiece = pl.pieces.find(p => p.r === pc.r && p.step === pc.step);
 
     if(actualPiece){
       actualPiece.r = target.r;
@@ -730,26 +725,20 @@ export default function App(){
       }
 
       step2=Math.min(LANES[r2].L, step2);
-      if(!occupied(r2, pc.side, step2)) targets.push({r:r2, step:step2});
+    targets.push({r:r2, step:step2});
     }
     return targets;
   }
 
   function useSwoop(){
-    if(!(game.mode==='pairChosen' && game.selectedPair)) return;
     const pl=game.players[game.current];
-    const selectedSum = game.selectedPair.sum;
-    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
-
-    // Only pieces on lanes adjacent to the selected sum can swoop
-    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
-    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
-
-    const eligiblePieces = pl.pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
+    if(!(pl.swoopTokens>0)) return;
+    // Any active piece eligible
+    const eligiblePieces = pl.pieces.filter(p => p.active && potentialSwoops(p).length>0);
     if(eligiblePieces.length===0) return;
-
     const newGame = {...game, mode:'chooseSwoop'};
-    newGame.message = `${pl.name}: click an active piece to Swoop.`;
+    newGame.previousMode = game.mode;
+    newGame.message = `${pl.name}: spend a token — click an active piece to Swoop.`;
     setGame(newGame);
   }
 
@@ -762,26 +751,19 @@ export default function App(){
 
   function finalizeSwoop(pc,target){
     const newGame = {...game, baskets: [...game.baskets]};
-    pc.r=target.r; pc.step=target.step;
-
-    // Check for basket pickup after swoop
-    afterMovePickup(pc, newGame);
-
-    newGame.rolled=null;
-    newGame.selectedPair=null;
-    newGame.swoopSource=null;
-    newGame.swoopTargets=null;
-
-    // Check if tailwind has any actions available
-    if (hasTailwindActions(newGame)) {
-      newGame.mode='tailwind';
-      newGame.message=`Tailwind: ${newGame.players[1-newGame.current].name} click a piece to advance or a base to spawn.`;
-    } else {
-      // Skip tailwind if no actions available
-      newGame.mode='preroll';
-      newGame.message=`${newGame.players[newGame.current].name}: Roll or Bank.`;
-    }
-
+    // spend token
+    const pl = newGame.players[newGame.current];
+    if(pl.swoopTokens>0) pl.swoopTokens -= 1;
+    performMoveWithPush(pc, target, newGame);
+    // Clear swoop selection state
+    newGame.swoopSource = null;
+    newGame.swoopTargets = null;
+    newGame.previousMode = null;
+    // Using a token completes the action for this roll — exit roll context
+    newGame.rolled = null;
+    newGame.selectedPair = null;
+    newGame.mode = 'preroll';
+    newGame.message = `${pl.name}: Roll or Bank.`;
     setGame(newGame);
   }
 
@@ -793,11 +775,7 @@ export default function App(){
     const sum = game.selectedSum;
 
     // Find the actual piece in the player's pieces array
-    const pc = pl.pieces.find(p =>
-      p.r === selectedPiece.r &&
-      p.step === selectedPiece.step &&
-      p.side === selectedPiece.side
-    );
+    const pc = pl.pieces.find(p => p.r === selectedPiece.r && p.step === selectedPiece.step);
 
     if(!pc) return;
 
@@ -852,13 +830,11 @@ export default function App(){
     }
   }
 
-  function handleTileClick(r, side, step, occ) {
+  function handleTileClick(r, step, occ) {
     if (game.mode === 'choosePiece') {
       // Click on a piece to select it for movement
       if (occ && occ.pi === game.current && game.pieceChoices) {
-        const selectedPiece = game.pieceChoices.find(p =>
-          p.r === r && p.step === step && p.side === side
-        );
+        const selectedPiece = game.pieceChoices.find(p => p.r === r && p.step === step);
         if (selectedPiece) {
           selectPieceForMove(selectedPiece);
         }
@@ -871,24 +847,22 @@ export default function App(){
     } else if (game.mode === 'pickSwoopDest') {
       // Click on a destination tile for swooping
       const target = game.swoopTargets.find(t => t.r === r && t.step === step);
-      if (target && game.swoopSource && game.swoopSource.side === side) {
+      if (target && game.swoopSource) {
         finalizeSwoop(game.swoopSource, target);
       }
     } else if (game.mode === 'chooseTopStepSwoop') {
       // Click on a destination tile for top step free swooping
       const target = game.topStepTargets.find(t => t.r === r && t.step === step);
-      if (target && game.topStepPiece && game.topStepPiece.side === side) {
+      if (target && game.topStepPiece) {
         chooseTopStepSwoopTarget(target);
       }
     } else if (game.mode === 'chooseMoveDest') {
       const target = game.moveTargets && game.moveTargets.find(t => t.r === r && t.step === step);
-      if (target && game.movePiece && game.movePiece.side === side) {
+      if (target && game.movePiece) {
         const newGame = {...game, baskets: [...game.baskets]};
         const pl = newGame.players[newGame.current];
         const pc = newGame.movePiece;
-        pc.r = target.r;
-        pc.step = target.step;
-        afterMovePickup(pc, newGame);
+        performMoveWithPush(pc, target, newGame);
 
         newGame.rolled = null;
         newGame.selectedPair = null;
@@ -911,23 +885,17 @@ export default function App(){
     } else if (game.mode === 'tailwind') {
       // Tailwind actions
       const opp = game.players[1 - game.current];
-      const oppSide = (1 - game.current === 0) ? 'L' : 'R';
-
-      if (side === oppSide) {
-        if (occ && opp.pieces.includes(occ.pc)) {
-          // Click on opponent piece to advance it
-          tailwindAdvance(occ.pc);
-        } else if (step === 1 && opp.pieces.length < 5 && !occupied(r, side, 1)) {
-          // Click on empty step 1 to spawn
-          tailwindSpawn(r);
-        }
+      if (occ && opp.pieces.includes(occ.pc)) {
+        // Click on opponent piece to advance it
+        tailwindAdvance(occ.pc);
+      } else if (step === 1 && opp.pieces.length < 5 && !occupied(r, 1)) {
+        // Click on empty step 1 to spawn
+        tailwindSpawn(r);
       }
     } else if (game.mode === 'tailwindChooseSwoop') {
       // Click on a destination tile for tailwind swoop
       const target = game.tailwindSwoopTargets && game.tailwindSwoopTargets.find(t => t.r === r && t.step === step);
-      if (target && game.tailwindPiece && game.tailwindPiece.side === side) {
-        handleTailwindSwoopChoice(target);
-      }
+      if (target && game.tailwindPiece) handleTailwindSwoopChoice(target);
     }
   }
 
@@ -968,10 +936,9 @@ export default function App(){
         if (index > -1) opp.pieces.splice(index, 1);
       }
       // Carrying piece can't advance beyond final step (shouldn't happen)
-    } else if (ns >= 1 && !occupied(piece.r, piece.side, ns)) {
-      // Normal advancement within lane bounds
-      piece.step=ns;
-      afterMovePickup(piece, newGame);
+    } else if (ns >= 1) {
+      // Normal advancement within lane bounds (with push)
+      performMoveWithPush(piece, {r: piece.r, step: ns}, newGame);
     }
 
     finishTailwind(newGame);
@@ -980,8 +947,7 @@ export default function App(){
   function tailwindSpawn(r){
     const newGame = {...game};
     const opp=newGame.players[1-newGame.current];
-    const side=(1-newGame.current===0)?'L':'R';
-    opp.pieces.push({r, side, step:1, carrying:false, active:false});
+    opp.pieces.push({r, step:1, carrying:false, active:false});
     finishTailwind(newGame);
   }
 
@@ -1000,9 +966,7 @@ export default function App(){
     const opp = newGame.players[1 - newGame.current];
 
     // Find the actual piece in the opponent's pieces array
-    const actualPiece = opp.pieces.find(p =>
-      p.r === piece.r && p.step === piece.step && p.side === piece.side
-    );
+    const actualPiece = opp.pieces.find(p => p.r === piece.r && p.step === piece.step);
 
     if (!actualPiece) {
       finishTailwind(newGame);
@@ -1012,9 +976,8 @@ export default function App(){
     if (action === 'move_down') {
       const L = LANES[actualPiece.r].L;
       const downStep = L - 1;
-      if (downStep >= 1 && !occupied(actualPiece.r, actualPiece.side, downStep)) {
-        actualPiece.step = downStep;
-        afterMovePickup(actualPiece, newGame);
+      if (downStep >= 1) {
+        performMoveWithPush(actualPiece, {r: actualPiece.r, step: downStep}, newGame);
         showToast(`Moved down to step ${downStep}`);
       }
     } else if (action === 'swoop') {
@@ -1022,9 +985,7 @@ export default function App(){
       if (targets.length === 1) {
         // Auto-select single target
         const target = targets[0];
-        actualPiece.r = target.r;
-        actualPiece.step = target.step;
-        afterMovePickup(actualPiece, newGame);
+        performMoveWithPush(actualPiece, target, newGame);
         showToast(`Swooped to lane ${LANES[target.r].sum}!`);
       } else if (targets.length > 1) {
         // Let player choose swoop target
@@ -1052,14 +1013,10 @@ export default function App(){
     const opp = newGame.players[1 - newGame.current];
 
     // Find the actual piece in the opponent's pieces array
-    const actualPiece = opp.pieces.find(p =>
-      p.r === piece.r && p.step === piece.step && p.side === piece.side
-    );
+    const actualPiece = opp.pieces.find(p => p.r === piece.r && p.step === piece.step);
 
     if (actualPiece) {
-      actualPiece.r = target.r;
-      actualPiece.step = target.step;
-      afterMovePickup(actualPiece, newGame);
+      performMoveWithPush(actualPiece, target, newGame);
       showToast(`Swooped to lane ${LANES[target.r].sum}!`);
     }
 
@@ -1074,7 +1031,6 @@ export default function App(){
   // Check if tailwind has any available actions
   function hasTailwindActions(gameState = game) {
     const opp = gameState.players[1 - gameState.current];
-    const oppSide = (1 - gameState.current === 0) ? 'L' : 'R';
 
     // Check if any opponent pieces can advance
     for (const pc of opp.pieces) {
@@ -1091,7 +1047,7 @@ export default function App(){
       }
 
       // Normal advancement within lane bounds
-      if (ns >= 1 && !occupiedInGame(gameState, pc.r, pc.side, ns)) {
+      if (ns >= 1) {
         return true;
       }
     }
@@ -1099,7 +1055,7 @@ export default function App(){
     // Check if can spawn (if has < 5 pieces and any step 1 is free)
     if (opp.pieces.length < 5) {
       for (let r = 0; r < LANES.length; r++) {
-        if (!occupiedInGame(gameState, r, oppSide, 1)) {
+        if (!occupiedInGame(gameState, r, 1)) {
           return true;
         }
       }
@@ -1108,11 +1064,9 @@ export default function App(){
     return false;
   }
 
-  function occupiedInGame(gameState, r, side, step) {
+  function occupiedInGame(gameState, r, step) {
     for (const pl of gameState.players) {
-      if (pl.pieces.some(pc => pc.r === r && pc.side === side && pc.step === step)) {
-        return true;
-      }
+      if (pl.pieces.some(pc => pc.r === r && pc.step === step)) return true;
     }
     return false;
   }
@@ -1184,6 +1138,8 @@ export default function App(){
       showToast(`${pl.name} delivered ${delivered}.`);
     }
     resolveDeterrents(pl, newGame);
+    // Earn a swoop token on Bank (not on Bust)
+    pl.swoopTokens = (pl.swoopTokens || 0) + 1;
     pl.pieces.forEach(p=>p.active=false);
 
     // Check for victory after delivery
@@ -1297,6 +1253,7 @@ export default function App(){
         pieceIcon: p.pieceIcon,
         activeIcon: p.activeIcon,
         score: p.score,
+        swoopTokens: p.swoopTokens || 0,
         pieces: p.pieces.map(x=>({...x}))
       })),
       current: game.current,
@@ -1319,6 +1276,7 @@ export default function App(){
             pieceIcon: '🐒',
             activeIcon: '🐵',
             score: state.players[0].score,
+            swoopTokens: (state.players[0].swoopTokens ?? 0),
             pieces: state.players[0].pieces || []
           },
           {
@@ -1326,6 +1284,7 @@ export default function App(){
             pieceIcon: '🕊️',
             activeIcon: '🦅',
             score: state.players[1].score,
+            swoopTokens: (state.players[1].swoopTokens ?? 0),
             pieces: state.players[1].pieces || []
           }
         ],
@@ -1411,16 +1370,16 @@ export default function App(){
 
 
   /* Rendering helpers */
-  function pieceAt(r, side, step){
+  function pieceAt(r, step){
     for(let pi=0; pi<game.players.length; pi++){
       const pl=game.players[pi];
-      const pc=pl.pieces.find(p=>p.r===r && p.side===side && p.step===step);
+      const pc=pl.pieces.find(p=>p.r===r && p.step===step);
       if(pc) return {pi, pc};
     }
     return null;
   }
 
-  function getCellClasses(r, side, step) {
+  function getCellClasses(r, step) {
     const lane = LANES[r];
     const isCp = checkpoints(lane.L).includes(step);
     const isDet = deterrents(lane.L, lane.sum).includes(step);
@@ -1434,97 +1393,72 @@ export default function App(){
     }
 
     // Add highlighting for interactive tiles
-    if (shouldHighlightTile(r, side, step)) {
+    if (shouldHighlightTile(r, step)) {
       classes += " swoop-highlight";
     }
 
     return classes;
   }
 
-  function shouldHighlightTile(r, side, step) {
+  function shouldHighlightTile(r, step) {
     // Highlight pieces available for selection
     if (game.mode === 'choosePiece' && game.pieceChoices) {
-      return game.pieceChoices.some(p => p.r === r && p.side === side && p.step === step);
+      return game.pieceChoices.some(p => p.r === r && p.step === step);
     }
 
-    // Highlight eligible pieces for swoop selection
-    if (game.mode === 'chooseSwoop' && game.selectedPair) {
-      const selectedSum = game.selectedPair.sum;
-      const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
-      const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
-      const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
-
+    // Highlight eligible pieces for token Swoop selection (not tied to selected pair)
+    if (game.mode === 'chooseSwoop') {
       const pl = game.players[game.current];
-      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step && p.active);
-      return piece && adjacentSums.includes(LANES[r].sum);
+      const piece = pl.pieces.find(p => p.r === r && p.step === step && p.active);
+      return !!(piece && potentialSwoops(piece).length > 0);
     }
 
     // Highlight swoop destinations
     if (game.mode === 'pickSwoopDest' && game.swoopTargets) {
-      return game.swoopTargets.some(t => t.r === r && t.step === step) &&
-             game.swoopSource && game.swoopSource.side === side;
+      return game.swoopTargets.some(t => t.r === r && t.step === step);
     }
 
     // Highlight top step swoop destinations
     if (game.mode === 'chooseTopStepSwoop' && game.topStepTargets && game.topStepPiece) {
-      return game.topStepTargets.some(t => t.r === r && t.step === step) &&
-             game.topStepPiece.side === side;
+      return game.topStepTargets.some(t => t.r === r && t.step === step);
     }
 
     // Highlight move destinations (up/down/sideways)
     if (game.mode === 'chooseMoveDest' && game.moveTargets && game.movePiece) {
-      return game.moveTargets.some(t => t.r === r && t.step === step) &&
-             game.movePiece.side === side;
+      return game.moveTargets.some(t => t.r === r && t.step === step);
     }
 
     // Highlight pieces carrying baskets for transfer source selection
     if (game.mode === 'chooseTransferSource') {
       const pl = game.players[game.current];
-      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step);
+      const piece = pl.pieces.find(p => p.r === r && p.step === step);
       return piece && piece.carrying;
     }
 
     // Highlight valid transfer targets
     if (game.mode === 'chooseTransferTarget' && game.transferTargets) {
       const pl = game.players[game.current];
-      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step);
+      const piece = pl.pieces.find(p => p.r === r && p.step === step);
       return piece && game.transferTargets.includes(piece);
     }
 
     // Highlight tailwind options
     if (game.mode === 'tailwind') {
       const opp = game.players[1 - game.current];
-      const oppSide = (1 - game.current === 0) ? 'L' : 'R';
-
-      // Highlight opponent pieces that can advance
-      if (side === oppSide) {
-        const piece = opp.pieces.find(p => p.r === r && p.side === side && p.step === step);
-        if (piece) {
-          const L = LANES[r].L;
-          const dir = piece.carrying ? -1 : +1;
-          const ns = piece.step + dir;
-
-          // Handle advancement beyond final step
-          if (ns > L) {
-            // Non-carrying piece can advance beyond final step (gets removed)
-            return !piece.carrying;
-          }
-
-          // Normal advancement within lane bounds
-          return ns >= 1 && !occupied(r, side, ns);
-        }
-
-        // Highlight spawn positions (step 1) if opponent has < 5 pieces
-        if (step === 1 && opp.pieces.length < 5 && !occupied(r, side, 1)) {
-          return true;
-        }
+      const piece = opp.pieces.find(p => p.r === r && p.step === step);
+      if (piece) {
+        const L = LANES[r].L;
+        const dir = piece.carrying ? -1 : +1;
+        const ns = piece.step + dir;
+        if (ns > L) return !piece.carrying;
+        return ns >= 1; // push model allows
       }
+      if (step === 1 && opp.pieces.length < 5 && !occupied(r, 1)) return true;
     }
 
     // Highlight tailwind swoop destinations
     if (game.mode === 'tailwindChooseSwoop' && game.tailwindSwoopTargets && game.tailwindPiece) {
-      return game.tailwindSwoopTargets.some(t => t.r === r && t.step === step) &&
-             game.tailwindPiece.side === side;
+      return game.tailwindSwoopTargets.some(t => t.r === r && t.step === step);
     }
 
     return false;
@@ -1551,16 +1485,13 @@ export default function App(){
       );
     }
 
-    // Center column (merged final step)
+    // Center column (shared final step)
     if (c === CENTER_COL) {
       const L = lane.L;
       const step = L; // This is the final step
+      const occ = pieceAt(r, step);
 
-      // Find pieces on the final step from both sides
-      const leftPiece = pieceAt(r, 'L', step);
-      const rightPiece = pieceAt(r, 'R', step);
-
-      // Determine classes for the merged final step
+      // Determine classes for the final step
       const cps = checkpoints(L);
       const dets = deterrents(L, lane.sum);
       const isCp = cps.includes(step);
@@ -1570,19 +1501,14 @@ export default function App(){
       if (isCp) classes += " swoop-cp";
       if (isDet) classes += " swoop-det";
 
-      // Check if either side should be highlighted
-      const leftHighlighted = shouldHighlightTile(r, 'L', step);
-      const rightHighlighted = shouldHighlightTile(r, 'R', step);
-      if (leftHighlighted || rightHighlighted) {
-        classes += " swoop-highlight";
-      }
+      const highlighted = shouldHighlightTile(r, step);
+      if (highlighted) classes += " swoop-highlight";
 
       return (
         <div
           key={`${r}-${c}`}
           className={classes}
-          onClick={leftHighlighted ? () => handleTileClick(r, 'L', step, leftPiece) :
-                   rightHighlighted ? () => handleTileClick(r, 'R', step, rightPiece) : undefined}
+          onClick={highlighted ? () => handleTileClick(r, step, occ) : undefined}
         >
           {/* Step number */}
           <span className="mobile-step-number">{step}</span>
@@ -1591,38 +1517,15 @@ export default function App(){
           {game.baskets[r] && lane.basket && (
             <div className="swoop-basket">🧺</div>
           )}
-
-          {/* Left side piece if present */}
-          {leftPiece && (
-            <div className={`swoop-piece left-piece ${leftPiece.pi === game.current && leftPiece.pc.active ? 'active' : ''} ${leftPiece.pc.carrying ? 'carry' : ''}`}>
+          {occ && (
+            <div className={`swoop-piece ${occ.pi === game.current && occ.pc.active ? 'active' : ''} ${occ.pc.carrying ? 'carry' : ''}`}>
               <span>
-                {leftPiece.pi === game.current && leftPiece.pc.active
-                  ? game.players[leftPiece.pi].activeIcon
-                  : game.players[leftPiece.pi].pieceIcon}
+                {occ.pi === game.current && occ.pc.active
+                  ? game.players[occ.pi].activeIcon
+                  : game.players[occ.pi].pieceIcon}
               </span>
-              {leftPiece.pc.carrying && (
-                <span className="mobile-carry-indicator">↩</span>
-              )}
-              {leftPiece.pi === game.current && leftPiece.pc.active && (
-                <div className="swoop-ring"></div>
-              )}
-            </div>
-          )}
-
-          {/* Right side piece if present */}
-          {rightPiece && (
-            <div className={`swoop-piece right-piece ${rightPiece.pi === game.current && rightPiece.pc.active ? 'active' : ''} ${rightPiece.pc.carrying ? 'carry' : ''}`}>
-              <span>
-                {rightPiece.pi === game.current && rightPiece.pc.active
-                  ? game.players[rightPiece.pi].activeIcon
-                  : game.players[rightPiece.pi].pieceIcon}
-              </span>
-              {rightPiece.pc.carrying && (
-                <span className="mobile-carry-indicator">↩</span>
-              )}
-              {rightPiece.pi === game.current && rightPiece.pc.active && (
-                <div className="swoop-ring"></div>
-              )}
+              {occ.pc.carrying && (<span className="mobile-carry-indicator">↩</span>)}
+              {occ.pi === game.current && occ.pc.active && (<div className="swoop-ring"></div>)}
             </div>
           )}
         </div>
@@ -1630,40 +1533,23 @@ export default function App(){
     }
 
     // Check if this column position corresponds to a game step
-    let side = null;
     let step = null;
-
-    // Check left side (excluding final step which is handled by center column)
-    for (let k = 1; k < lane.L; k++) { // k < lane.L excludes the final step
-      if (colForStep('L', k, lane.L) === c) {
-        side = 'L';
-        step = k;
-        break;
-      }
-    }
-
-    // Check right side if not found on left (excluding final step)
-    if (!side) {
-      for (let k = 1; k < lane.L; k++) { // k < lane.L excludes the final step
-        if (colForStep('R', k, lane.L) === c) {
-          side = 'R';
-          step = k;
-          break;
-        }
-      }
+    // Shared-lane cells only on left arc (final handled above)
+    for (let k = 1; k < lane.L; k++) {
+      if (colForStep('L', k, lane.L) === c) { step = k; break; }
     }
 
     // If this is a valid game position
-    if (side && step) {
-      const occ = pieceAt(r, side, step);
-      const classes = getCellClasses(r, side, step);
-      const isHighlighted = shouldHighlightTile(r, side, step);
+    if (step) {
+      const occ = pieceAt(r, step);
+      const classes = getCellClasses(r, step);
+      const isHighlighted = shouldHighlightTile(r, step);
 
       return (
         <div
           key={`${r}-${c}`}
           className={classes}
-          onClick={isHighlighted ? () => handleTileClick(r, side, step, occ) : undefined}
+          onClick={isHighlighted ? () => handleTileClick(r, step, occ) : undefined}
         >
           {/* Step number */}
           <span className="mobile-step-number">{step}</span>
@@ -1714,10 +1600,12 @@ export default function App(){
             <div className={`mobile-score ${game.current === 0 ? 'active-player' : ''}`}>
               <span>🐒</span>
               <span>{game.players[0].score}</span>
+              <span style={{marginLeft: 8}}>✈️ {game.players[0].swoopTokens||0}</span>
             </div>
             <div className={`mobile-score ${game.current === 1 ? 'active-player' : ''}`}>
               <span>🕊️</span>
               <span>{game.players[1].score}</span>
+              <span style={{marginLeft: 8}}>✈️ {game.players[1].swoopTokens||0}</span>
             </div>
           </div>
         </div>
@@ -1769,9 +1657,9 @@ export default function App(){
             <button
               className="mobile-button"
               onClick={useSwoop}
-              disabled={game.mode === 'gameOver' || !canSwoopThisRoll()}
+              disabled={game.mode === 'gameOver' || !canSwoopNow()}
             >
-              🔄 Swoop
+              🔄 Swoop Token
             </button>
             <button
               className="mobile-button"

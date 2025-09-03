@@ -80,8 +80,8 @@ function hashStr(str) {
 function initialGame() {
   return {
     players: [
-      { name: 'Bot1', side: 'L', score: 0, pieces: [] },
-      { name: 'Bot2', side: 'R', score: 0, pieces: [] },
+      { name: 'Bot1', side: 'L', score: 0, swoopTokens: 0, pieces: [] },
+      { name: 'Bot2', side: 'R', score: 0, swoopTokens: 1, pieces: [] },
     ],
     current: 0,
     baskets: LANES.map((l) => l.basket),
@@ -91,20 +91,10 @@ function initialGame() {
   };
 }
 
-function occupied(game, r, side, step) {
-  // For the final step (merged step), allow both sides to occupy it
-  const L = LANES[r].L;
-  if (step === L) {
-    // Check if the same side already has a piece on the final step
-    for (const pl of game.players) {
-      if (pl.pieces.some((pc) => pc.r === r && pc.side === side && pc.step === step)) return true;
-    }
-    return false;
-  }
-
-  // For non-final steps, use original logic
+function occupied(game, r, _sideIgnored, step) {
+  // Shared-lane occupancy across both players
   for (const pl of game.players) {
-    if (pl.pieces.some((pc) => pc.r === r && pc.side === side && pc.step === step)) return true;
+    if (pl.pieces.some((pc) => pc.r === r && pc.step === step)) return true;
   }
   return false;
 }
@@ -192,7 +182,7 @@ function ensurePieceForSum(game, pl, sum) {
 
   // No pieces on route - try to spawn a new piece
   if (pl.pieces.length >= 5 || activeCount(pl) >= 2) return null;
-  if (occupied(game, r, side, 1)) return null;
+  if (occupied(game, r, null, 1)) return null;
   const pc = { r, side, step: 1, carrying: false, active: true };
   pl.pieces.push(pc);
   // Log piece spawn
@@ -285,7 +275,7 @@ function canMoveOnSum(game, pl, sum) {
     return false;
   } else {
     // No pieces on route - check if we can spawn a new piece
-    return pl.pieces.length < 5 && !occupied(game, r, pl.side, 1) && activeCount(pl) < 2;
+    return pl.pieces.length < 5 && !occupied(game, r, null, 1) && activeCount(pl) < 2;
   }
 }
 
@@ -299,7 +289,7 @@ function canTopStepMoveDown(game, pc) {
   const L = LANES[pc.r].L;
   if (pc.step !== L) return false;
   const downStep = L - 1;
-  return downStep >= 1 && !occupied(game, pc.r, pc.side, downStep);
+  return downStep >= 1; // Push model allows moving into occupied
 }
 
 // Check if a piece at top step can do a free swoop to adjacent lanes
@@ -322,9 +312,7 @@ function potentialTopStepSwoops(game, pc) {
 
     // For top step free swoop, piece can go to top step of adjacent lanes
     const step2 = LANES[r2].L;
-    if (!occupied(game, r2, pc.side, step2)) {
-      targets.push({ r: r2, step: step2 });
-    }
+    targets.push({ r: r2, step: step2 });
   }
   return targets;
 }
@@ -336,13 +324,13 @@ function moveTargets(game, pc) {
 
   // Up
   const up = pc.step + 1;
-  if (up <= L && !occupied(game, pc.r, pc.side, up)) {
+  if (up <= L) {
     targets.push({ r: pc.r, step: up });
   }
 
   // Down
   const down = pc.step - 1;
-  if (down >= 1 && !occupied(game, pc.r, pc.side, down)) {
+  if (down >= 1) {
     targets.push({ r: pc.r, step: down });
   }
 
@@ -352,9 +340,7 @@ function moveTargets(game, pc) {
       const r2 = pc.r + dr;
       if (r2 < 0 || r2 >= LANES.length) continue;
       const step2 = LANES[r2].L;
-      if (!occupied(game, r2, pc.side, step2)) {
-        targets.push({ r: r2, step: step2 });
-      }
+      targets.push({ r: r2, step: step2 });
     }
   }
   return targets;
@@ -371,19 +357,60 @@ function afterMovePickup(game, pc) {
   return false;
 }
 
+function returnBasketToTop(game, r){
+  if(!LANES[r].basket) return;
+  game.baskets[r] = true;
+}
+
+function applyPushChain(game, origin, dest){
+  const dr = dest.r - origin.r;
+  const ds = dest.step - origin.step;
+  if(dr===0 && ds===0) return;
+  // find occupant at dest
+  let occPi=-1, occPc=null;
+  for(let pi=0; pi<game.players.length; pi++){
+    const pc = game.players[pi].pieces.find(p=>p.r===dest.r && p.step===dest.step);
+    if(pc){ occPi=pi; occPc=pc; break; }
+  }
+  if(!occPc) return;
+  const r2 = dest.r + dr;
+  if(r2 < 0 || r2 >= LANES.length){
+    const owner = game.players[occPi];
+    owner.pieces = owner.pieces.filter(p=>p!==occPc);
+    if(occPc.carrying) returnBasketToTop(game, dest.r);
+    return;
+  }
+  const L2 = LANES[r2].L;
+  const s2 = dest.step + ds;
+  if(s2 < 1 || s2 > L2){
+    const owner = game.players[occPi];
+    owner.pieces = owner.pieces.filter(p=>p!==occPc);
+    if(occPc.carrying) returnBasketToTop(game, dest.r);
+    return;
+  }
+  applyPushChain(game, dest, { r: r2, step: s2 });
+  occPc.r = r2; occPc.step = s2;
+}
+
+function performMoveWithPush(game, pc, target){
+  const origin = { r: pc.r, step: pc.step };
+  applyPushChain(game, origin, target);
+  pc.r = target.r; pc.step = target.step;
+  afterMovePickup(game, pc);
+}
+
 function advanceOne(game, pc) {
   const L = LANES[pc.r].L;
   const dir = pc.carrying ? -1 : +1;
   const oldStep = pc.step;
   const ns = pc.step + dir;
-  if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
-    pc.step = ns;
-    afterMovePickup(game, pc);
+  if (ns >= 1 && ns <= L) {
+    performMoveWithPush(game, pc, { r: pc.r, step: ns });
     // Log piece movement
     game.moveHistory.push({
       type: 'move',
       player: game.current,
-      piece: { r: pc.r, from: oldStep, to: pc.step },
+      piece: { r: pc.r, from: oldStep, to: ns },
       carrying: pc.carrying,
       turn: game.moveHistory.filter(m => m.type === 'turn_start').length
     });
@@ -447,15 +474,13 @@ function moveTopStepDown(game, pc) {
   if (pc.step !== L) return false;
 
   const downStep = L - 1;
-  if (downStep >= 1 && !occupied(game, pc.r, pc.side, downStep)) {
-    const oldStep = pc.step;
-    pc.step = downStep;
-
+  if (downStep >= 1) {
+    performMoveWithPush(game, pc, { r: pc.r, step: downStep });
     // Log the move down
     game.moveHistory.push({
       type: 'move_down',
       player: game.current,
-      piece: { r: pc.r, from: oldStep, to: pc.step },
+      piece: { r: pc.r, to: downStep },
       carrying: pc.carrying,
       turn: game.moveHistory.filter(m => m.type === 'turn_start').length
     });
@@ -467,21 +492,13 @@ function moveTopStepDown(game, pc) {
 // Perform a free swoop from top step to adjacent lane's top step
 function performTopStepFreeSwoop(game, pc, target) {
   if (pc.step !== LANES[pc.r].L) return false;
-  if (occupied(game, target.r, pc.side, target.step)) return false;
-
-  const oldR = pc.r;
-  const oldStep = pc.step;
-  pc.r = target.r;
-  pc.step = target.step;
-
-  // Check for basket pickup after swoop
-  afterMovePickup(game, pc);
-
+  const old = { r: pc.r, step: pc.step };
+  performMoveWithPush(game, pc, target);
   // Log the free swoop
   game.moveHistory.push({
     type: 'free_swoop',
     player: game.current,
-    piece: { from: { r: oldR, step: oldStep }, to: { r: pc.r, step: pc.step } },
+    piece: { from: old, to: { r: pc.r, step: pc.step } },
     carrying: pc.carrying,
     turn: game.moveHistory.filter(m => m.type === 'turn_start').length
   });
@@ -543,22 +560,20 @@ function potentialSwoops(game, pc) {
     }
 
     step2 = Math.min(LANES[r2].L, step2);
-    if (!occupied(game, r2, pc.side, step2)) targets.push({ r: r2, step: step2 });
+    targets.push({ r: r2, step: step2 });
   }
   return targets;
 }
 
-function eligibleSwoopPiecesForSum(game, pl, sum) {
-  const selectedLaneIndex = LANES.findIndex((lane) => lane.sum === sum);
-  if (selectedLaneIndex < 0) return [];
-  const adj = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter((i) => i >= 0 && i < LANES.length);
-  const adjSums = adj.map((i) => LANES[i].sum);
-  return pl.pieces.filter((p) => p.active && adjSums.includes(LANES[p.r].sum));
+function eligibleSwoopPiecesForSum(game, pl, _sumIgnored) {
+  // Token-based: any active piece is eligible
+  return pl.pieces.filter((p) => p.active);
 }
 
-function canSwoopWithSum(game, pl, sum) {
-  for (const pc of eligibleSwoopPiecesForSum(game, pl, sum)) {
-    if (potentialSwoops(game, pc).length > 0) return true;
+function canSwoopWithSum(game, pl, _sumIgnored) {
+  if (!(pl.swoopTokens > 0)) return false;
+  for (const pc of pl.pieces) {
+    if (pc.active && potentialSwoops(game, pc).length > 0) return true;
   }
   return false;
 }
@@ -622,6 +637,8 @@ function bank(game) {
   pl.pieces = kept;
   pl.score += delivered;
   resolveDeterrents(game, pl);
+  // Earn a swoop token on Bank (not on Bust)
+  pl.swoopTokens = (pl.swoopTokens || 0) + 1;
   for (const p of pl.pieces) p.active = false;
   game.current = 1 - game.current;
   return delivered;
@@ -635,16 +652,15 @@ function tailwind(game, metrics) {
   // Try to advance pieces - prioritize normal advancement over removal
   const candidates = [...opp.pieces];
 
-  // First pass: try normal advancement within lane bounds
+  // First pass: try normal advancement within lane bounds (with push)
   for (const pc of candidates) {
     const L = LANES[pc.r].L;
     const dir = pc.carrying ? -1 : +1;
     const ns = pc.step + dir;
 
     // Normal advancement within lane bounds
-    if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
-      pc.step = ns;
-      afterMovePickup(game, pc);
+    if (ns >= 1 && ns <= L) {
+      performMoveWithPush(game, pc, { r: pc.r, step: ns });
       metrics.tailwindAdvances++;
       return true;
     }
@@ -672,7 +688,7 @@ function tailwind(game, metrics) {
   // Otherwise, spawn if possible
   if (opp.pieces.length < 5) {
     for (let r = 0; r < LANES.length; r++) {
-      if (!occupied(game, r, side, 1)) {
+      if (!occupied(game, r, null, 1)) {
         opp.pieces.push({ r, side, step: 1, carrying: false, active: false });
         metrics.tailwindSpawns++;
         return true;
@@ -943,13 +959,12 @@ function playTurn(game, bots, rng, metrics, targetScore) {
             chosen = pc.carrying ? (down || up) : (up || down);
           }
           if (chosen) {
-            const oldStep = pc.step;
-            pc.step = chosen.step;
-            afterMovePickup(game, pc);
+            const before = { r: pc.r, step: pc.step };
+            performMoveWithPush(game, pc, chosen);
             game.moveHistory.push({
               type: 'move',
               player: game.current,
-              piece: { r: pc.r, from: oldStep, to: pc.step },
+              piece: { r: pc.r, from: before.step, to: pc.step },
               carrying: pc.carrying,
               turn: game.moveHistory.filter(m => m.type === 'turn_start').length
             });
@@ -963,16 +978,14 @@ function playTurn(game, bots, rng, metrics, targetScore) {
         }
       }
     } else if (decision.type === 'swoop') {
-      // Apply swoop
+      // Apply swoop via token
       const pc = decision.pc;
       if (pc) {
+        const pl = game.players[game.current];
+        if (pl.swoopTokens > 0) pl.swoopTokens -= 1;
         const oldR = pc.r;
         const oldStep = pc.step;
-        pc.r = decision.target.r;
-        pc.step = decision.target.step;
-
-        // Check for basket pickup after swoop
-        afterMovePickup(game, pc);
+        performMoveWithPush(game, pc, decision.target);
 
         // Log swoop
         game.moveHistory.push({
@@ -986,9 +999,6 @@ function playTurn(game, bots, rng, metrics, targetScore) {
 
         turnStats.swoops++;
         turnStats.actionsThisTurn++;
-        metrics.tailwindEvents++;
-        // Tailwind immediate reaction by opponent
-        tailwind(game, metrics);
       }
     } else if (decision.type === 'bust') {
       const delivered = applyBust(game);

@@ -1,18 +1,18 @@
 SWOOP — Rulebook (Print & Play / Pass & Play)
-A 2-player, push-your-luck race about Monkeys and Seagulls stealing baskets and sprinting home.
+A 2‑player, push‑your‑luck race about Monkeys and Seagulls stealing baskets and sprinting home — now with shared lanes, push chains, and token‑based Swoops.
 1) Summary
 Players: 2 (Monkeys vs Seagulls)
 Goal: Deliver baskets to your shore. First to the agreed score wins (recommended 5).
-Core Loop: Roll 3d6 → pick any pair → Move or Swoop. Push your luck until you Bank, or you Bust.
+Core Loop: Roll 3d6 → pick any pair → Move. You may also spend Swoop tokens to make a sideways jump. Push your luck until you Bank, or you Bust.
 2) Components
-Board showing 11 lanes labeled 2–12 from both shores, converging at the center.
+Board showing 11 lanes labeled 2–12 converging at the center. Lanes are shared by both players.
 Baskets sit at the center tops of even lanes.
-Per player: 5 pieces (you may have at most 5 on the board).
-3 six-sided dice.
-Tokens are optional for Checkpoints/Deterrents (board usually prints them).
+Per player: 5 pieces (max 5 on the board at once).
+Per player: Swoop tokens (first player starts with 0; second player starts with 1).
+3 six‑sided dice.
 3) Board Anatomy
-Lanes are different lengths. Steps count from each shore toward the center (step 1 is the shore; the highest step is just below the center).
-No stacking: Only one piece per cell—ever.
+Lanes are different lengths. Steps count from each shore toward the center (step 1 is the shore; the highest step L is just below the center).
+Shared lanes: There is only one cell per lane step for both players — only one piece can occupy a cell at a time.
 Adjacent lanes: each lane neighbors its immediate lower and higher sum (e.g., 6 is adjacent to 5 and 7).
 3.1 Lane lengths & baskets
 Lane	Steps	Basket?
@@ -28,96 +28,80 @@ Lane	Steps	Basket?
 11	4	❌
 12	3	✅
 3.2 Special cells (by lane length L)
-Checkpoints: at 2, (4 if L≥6), and L-1.
-Deterrents: at 3 and L-2 (and 5 on lanes 6/8 when L≥5).
-Special cells never overlap; if one rule would overlap another, the board uses the checkpoint.
+Checkpoints: at 2, (4 if L≥6), and L‑1.
+Deterrents: at 3 and L‑2 (and 5 on lanes 6/8 when L≥5).
+Special cells never overlap; if one would, the board prefers the checkpoint.
 Theme: Checkpoints are safe resting spots; Deterrents are hazards you only suffer when your turn ends.
 4) Setup
 Place the board between players with Monkeys on the left shore and Seagulls on the right shore (both approach the center).
 Put basket icons at the center of all even lanes (2/4/6/8/10/12).
-Each player takes 5 pieces; all off-board.
+Each player takes 5 pieces; all off‑board.
+Give Swoop tokens: first player 0; second player 1.
 Agree on a target score (default 5).
 5) Turn Structure
 On your turn:
-A) Pre-roll
-You may Bank (Stop) before rolling (details in §7).
-Otherwise, press on to Roll.
-B) Roll
-Roll 3 dice.
-C) Choose any pair of the three dice
-The unused die is ignored.
-D) Spend that pair to do one of:
-Move (the pair’s sum lane), or
-Swoop (sideways, pair used as “energy”, not as a sum).
-Then you may roll again and repeat, until you Bank or Bust.
+A) Pre‑roll — You may Bank (Stop) before rolling (details in §7), otherwise roll.
+B) Roll — Roll 3 dice.
+C) Choose any pair — The third die is ignored.
+D) Act — Spend the pair to Move (see §6.1). At any time during your turn, you may spend a Swoop token to Swoop with an active piece (see §6.2). Then you may roll again and repeat, until you Bank or Bust.
 6) Actions
-6.1 Move (pair sum → “your lane”)
-If you have no piece on that sum’s lane this turn:
-Start a piece on your shore at step 1 on that lane and mark it active (see §8).
-That spend does not advance it yet; it merely claims the lane for this turn.
-If you already have a piece on that lane:
-Choose a direction each time you Move:
-• Up: +1 step toward the center, or
-• Down: −1 step toward home.
-At the top step (step L) you may instead move sideways to the adjacent lane’s top step (a free sideways move). This is part of Move (not a Swoop) and does not trigger Tailwind.
-Blockers: You cannot move if the destination cell is occupied.
+6.1 Move (pair sum → lane)
+If you have no piece on that sum’s lane this turn: start a piece at step 1 on that lane and mark it active (see §8).
+If you already have a piece on that lane: choose direction — Up (+1 toward center) or Down (−1 toward home).
+Top‑step sidestep: From the top step (step L) you may instead move sideways to the adjacent lane’s top step. This is part of Move (not a Swoop) and costs no token.
 Pickup: Reaching the top step of an even lane instantly picks up its basket (if available) and flips that piece to returning.
-Delivery: Delivery never happens during Move; see End of Turn (§7).
-6.2 Swoop (sideways)
-Choose any active piece (yours) and shift it to an adjacent lane (sum±1), landing at the same step if possible.
-Odd-lane top slope: If the piece starts the Swoop from step (L-1) on an odd lane (3/5/7/9/11), apply:
-3 → +1 step, 11 → +1 step
-5/7/9 → −1 step
-(Cap to that adjacent lane’s valid range.)
-No stacking: Illegal if the destination cell is occupied.
-Tailwind (immediate reaction by opponent):
-Opponent chooses one of:
-Advance +1 any one of their pieces (respecting direction and blocking), or
-Spawn a new piece at step 1 on any lane (if they have < 5 pieces total and the cell is free).
-If no legal Tailwind is possible, nothing happens.
+Push (shared‑lane collisions):
+• If a Move or Swoop would land on an occupied cell (yours or opponent’s), the occupying piece is pushed exactly 1 cell “away” in the direction of the approach. This can chain across multiple pieces.
+• Pushing off the board: If a push would go past step 1 (toward home) or past step L (toward the center), that pushed piece is removed. If it was carrying, its basket immediately returns to that lane’s top step.
+• One piece per cell is always maintained after all pushes resolve.
+6.2 Swoop (token‑based sideways move)
+Spend 1 Swoop token to choose any one of your active pieces and shift it to an adjacent lane (sum±1):
+• Normal case: Land at the same step (capped by the target lane’s length).
+• Odd‑lane top slope: If starting from step (L‑1) on an odd lane (3/5/7/9/11), adjust the landing step by: 3/11 → +1; 5/7/9 → −1 (cap to the adjacent lane’s valid range).
+• Top‑step sidestep is part of Move and does not cost a token (§6.1).
+• Push resolves if the landing cell is occupied (chain/offs).
+• Swoop tokens are not tied to the dice pair and can be used even when no Moves are available, as long as an active piece has a legal Swoop.
 7) Ending Your Turn
 Your turn ends in one of two ways.
 7.1 Bank (Stop) — only before you roll
 You lock in progress safely:
-Outward pieces (not carrying baskets) slide down to the nearest checkpoint ≤ their current step on their lane.
-If there is no checkpoint behind them (e.g., at step 1), that piece falls off the board.
-Returning pieces (carrying baskets) do not slide.
-Deterrents trigger now:
-Any piece on a deterrent is removed.
-If it was carrying, its basket is returned to the center of that lane.
-Deliveries:
-Each carrying piece at step 1 delivers: +1 point, then remove the piece.
-Deactivate all your pieces; pass turn.
+• Outward pieces (not carrying) slide down to the nearest checkpoint ≤ their current step on their lane. If there is no checkpoint behind them (e.g., at step 1), that piece falls off the board.
+• Returning pieces (carrying baskets) do not slide.
+• Deterrents trigger now: any piece on a deterrent is removed. If it was carrying, its basket returns to the lane’s top.
+• Deliveries: each carrying piece at step 1 delivers: +1 point, then remove the piece.
+• Earn 1 Swoop token. (Tokens are only gained on Bank, never on a Bust.)
+• Deactivate all your pieces; pass turn.
 7.2 Bust — after rolling, you cannot act
-You Bust if, given your roll:
-No pair can make a legal Move and
-No piece can Swoop legally.
-On a Bust, skip steps 1–2 above and apply steps 3–5 (Deterrents, Deliveries, Deactivate).
-8) Active Pieces (per-turn limit)
+You Bust if, given your roll: no pair can make a legal Move and no piece can Swoop legally (i.e., you have no usable token Swoops).
+On a Bust, apply Deterrents/Deliveries/Deactivate (no Bank sliding, no token gain).
+8) Active Pieces (per‑turn limit)
 You may have at most 2 active pieces (i.e., 2 lanes “in play”) during your current turn.
 A lane becomes active when you start or move its piece this turn.
-You can only Swoop with active pieces.
+Only active pieces can Swoop.
 All pieces become inactive at end of your turn.
 9) Additional Rules & Edge Cases
-Max pieces on board: 5 per player. If you already have 5, you cannot spawn (even via Tailwind).
-White/blank cells at the extreme ends are visual padding only. Only the colored lane tiles (including plain grey) are usable spaces.
-Blockers: If a move would land on an occupied cell, the move is illegal.
-Basket scarcity: Each even lane holds at most 1 basket at a time. If a carrying piece is removed, that basket reappears at the center top of its lane.
-Turn order: Monkeys start by default (feel free to randomize).
-Sportsmanship: If multiple legal Tailwind choices exist, the opponent chooses one; if their chosen +1 is blocked, it simply does nothing.
+Max pieces on board: 5 per player. If you already have 5, you cannot spawn.
+White/blank cells at the extreme ends are visual padding only. Use only the colored lane tiles.
+Shared occupancy: If a Move or Swoop targets an occupied cell, pushing resolves the conflict (no illegal “blocked” lands).
+Basket scarcity: Each even lane holds at most 1 basket at a time. If a carrying piece is removed, that basket reappears at the lane’s top step.
+Turn order: Monkeys start by default (feel free to randomize). Give starting Swoop tokens accordingly (first player 0; second player 1).
+No Tailwind: There is no opponent reaction after Swoops.
 10) Scoring & Winning
 Delivery = 1 point.
-First to the agreed score wins (5 recommended).
-For shorter games: 3. For long sessions: 7.
+First to the agreed score wins (5 recommended). For shorter games: 3. For long sessions: 7.
 11) Strategy Notes (optional)
-Use early Swoops to reposition onto even lanes; let Tailwind “wake” the opponent on awkward lanes.
-Checkpoints are your safety net—Bank when your lanes are exposed to Deterrents.
-When returning, prioritize unblocked paths; a single blocker can force a detour via Swoop.
+Use token Swoops to escape bad rolls or reposition onto even lanes.
+Checkpoints are your safety net — Bank when your outward lanes are exposed to Deterrents.
+Push chains can open lanes or eject blockers — plan vectors that favor you.
 12) Glossary
 Lane: One route labeled 2–12.
-Step: Distance from shore; increases toward center.
+Step: Distance from shore; increases toward center; L is the top step.
 Checkpoint: Safe tile; outward pieces slide back to it on Bank.
 Deterrent: Hazard tile; removes a piece on Bank/Bust.
+Basket: Pickup at the top of even lanes; carried pieces move home.
+Swoop token: A resource you can spend to shift an active piece to an adjacent lane.
+Push: Forced displacement of an occupant when a Move/Swoop lands on its cell (can chain; off‑board pieces are removed; baskets return).
+Active piece: A lane you’ve engaged this turn (max 2).
 Basket: Pickup at the top of even lanes; carried pieces move home.
 Swoop: Sideways shift to an adjacent lane; may include odd-lane slope (↑/↓) at the top.
 Tailwind: Opponent’s immediate +1 (or spawn) after someone Swoops.
