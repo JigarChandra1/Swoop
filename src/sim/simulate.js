@@ -71,6 +71,34 @@ function tileTypeAt(r, step){
 }
 function tileExistsAt(r, step){ return tileTypeAt(r, step) !== 'Gap'; }
 
+function stepForSpace(r, space) {
+  // Find the best movement step for a given geometric space
+  // First try to find an exact match
+  const L = LANES[r].L;
+  for (let step = 1; step <= L; step++) {
+    if (mapStepToGrid(r, step) === space && tileExistsAt(r, step)) {
+      return step;
+    }
+  }
+
+  // If no exact match, find the nearest valid step
+  let bestStep = null;
+  let minDistance = Infinity;
+
+  for (let step = 1; step <= L; step++) {
+    if (tileExistsAt(r, step)) {
+      const stepSpace = mapStepToGrid(r, step);
+      const distance = Math.abs(stepSpace - space);
+      if (distance < minDistance) {
+        minDistance = distance;
+        bestStep = step;
+      }
+    }
+  }
+
+  return bestStep;
+}
+
 // Add missing deterrents function from main game
 function deterrents(L, sum) {
   const det = [];
@@ -391,9 +419,9 @@ function returnBasketToTop(game, r){
   game.baskets[r] = true;
 }
 
-function applyPushChain(game, origin, dest, pusher){
+function applyPushChain(game, origin, dest, pusher, isSwoop = false){
   const dr = dest.r - origin.r;
-  const ds = dest.step - origin.step;
+  const ds = isSwoop ? 0 : (dest.step - origin.step); // For swoops, don't push in step direction
   if(dr===0 && ds===0) return;
   // find occupant at dest
   let occPi=-1, occPc=null;
@@ -419,13 +447,13 @@ function applyPushChain(game, origin, dest, pusher){
     owner.pieces = owner.pieces.filter(p=>p!==occPc);
     return;
   }
-  applyPushChain(game, dest, { r: r2, step: s2 }, occPc);
+  applyPushChain(game, dest, { r: r2, step: s2 }, occPc, isSwoop);
   occPc.r = r2; occPc.step = s2;
 }
 
-function performMoveWithPush(game, pc, target){
+function performMoveWithPush(game, pc, target, isSwoop = false){
   const origin = { r: pc.r, step: pc.step };
-  applyPushChain(game, origin, target, pc);
+  applyPushChain(game, origin, target, pc, isSwoop);
   pc.r = target.r; pc.step = target.step;
   afterMovePickup(game, pc);
 }
@@ -580,18 +608,20 @@ function potentialSwoops(game, pc) {
   for (const dr of [-1, +1]) {
     const r2 = r + dr;
     if (r2 < 0 || r2 >= LANES.length) continue;
-    let step2 = pc.step;
+    let step2;
 
-    if (atOddTop) {
-      // Special slope adjustment for pieces at L-1 on odd lanes
-      step2 = Math.min(LANES[r2].L, Math.max(1, pc.step + oddSlope[sum]));
-    } else if (atTopStep) {
+    if (atTopStep) {
       // Pieces at the top step can swoop to the top step of adjacent lanes
       step2 = LANES[r2].L;
+    } else {
+      // Use geometric space mapping for all other cases
+      const space = mapStepToGrid(r, pc.step);
+      step2 = stepForSpace(r2, space);
     }
 
-    step2 = Math.min(LANES[r2].L, step2);
-    targets.push({ r: r2, step: step2 });
+    if (step2 && tileExistsAt(r2, step2)) {
+      targets.push({ r: r2, step: step2 });
+    }
   }
   return targets;
 }
@@ -1007,7 +1037,7 @@ function playTurn(game, bots, rng, metrics, targetScore) {
         if (pl.swoopTokens > 0) pl.swoopTokens -= 1;
         const oldR = pc.r;
         const oldStep = pc.step;
-        performMoveWithPush(game, pc, decision.target);
+        performMoveWithPush(game, pc, decision.target, true); // isSwoop = true
 
         // Log swoop
         game.moveHistory.push({

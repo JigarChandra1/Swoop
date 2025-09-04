@@ -186,6 +186,34 @@ function tileTypeAt(r, step){
   return TILE_MAP[r][gs-1] || 'Gap';
 }
 function tileExistsAt(r, step){ return tileTypeAt(r, step) !== 'Gap'; }
+
+function stepForSpace(r, space) {
+  // Find the best movement step for a given geometric space
+  // First try to find an exact match
+  const L = lanes[r].L;
+  for (let step = 1; step <= L; step++) {
+    if (mapStepToGrid(r, step) === space && tileExistsAt(r, step)) {
+      return step;
+    }
+  }
+
+  // If no exact match, find the nearest valid step
+  let bestStep = null;
+  let minDistance = Infinity;
+
+  for (let step = 1; step <= L; step++) {
+    if (tileExistsAt(r, step)) {
+      const stepSpace = mapStepToGrid(r, step);
+      const distance = Math.abs(stepSpace - space);
+      if (distance < minDistance) {
+        minDistance = distance;
+        bestStep = step;
+      }
+    }
+  }
+
+  return bestStep;
+}
 const centerCol = 13;
 const leftStartCol = 1;
 const rightEndCol = cols-2;
@@ -791,9 +819,9 @@ function nearestValidStepDown(r, step){
   while(s >= 1 && !tileExistsAt(r, s)) s--;
   return s;
 }
-function applyPushChain(origin, dest, pusher){
+function applyPushChain(origin, dest, pusher, isSwoop = false){
   const dr = dest.r - origin.r;
-  const ds = dest.step - origin.step;
+  const ds = isSwoop ? 0 : (dest.step - origin.step); // For swoops, don't push in step direction
   if(dr===0 && ds===0) return;
 
   // attempt to push occupant at dest, if any
@@ -830,7 +858,7 @@ function applyPushChain(origin, dest, pusher){
   }
 
   // recurse to push next occupant, with current occupant as pusher
-  applyPushChain(dest, {r:r2, step:s2}, occ.pc);
+  applyPushChain(dest, {r:r2, step:s2}, occ.pc, isSwoop);
 
   // after clearing next spot, move this occupant forward
   occ.pc.r = r2;
@@ -838,10 +866,10 @@ function applyPushChain(origin, dest, pusher){
 }
 
 // Perform a move or swoop with push resolution
-function performMoveWithPush(pc, target){
+function performMoveWithPush(pc, target, isSwoop = false){
   const origin = {r: pc.r, step: pc.step};
   // resolve chain pushes at target
-  applyPushChain(origin, target, pc);
+  applyPushChain(origin, target, pc, isSwoop);
   // move the moving piece
   pc.r = target.r;
   pc.step = target.step;
@@ -1141,14 +1169,11 @@ function potentialSwoops(pc){
     const r2=r+dr; if(r2<0||r2>=rows) continue;
     let step2;
 
-    if(atOddTop){
-      // Special slope adjustment for pieces at L-1 on odd lanes
-      step2 = Math.min(lanes[r2].L, Math.max(1, pc.step + oddSlope[sum]));
-    } else if(atTopStep){
+    if(atTopStep){
       // Pieces at the top step can swoop to the top step of adjacent lanes
       step2 = lanes[r2].L;
     } else {
-      // Match by geometric space across lanes
+      // Use geometric space mapping for all other cases
       const space = mapStepToGrid(r, pc.step);
       step2 = stepForSpace(r2, space);
     }
@@ -1181,7 +1206,7 @@ function usePairForSwoop(){
         cell.onclick = ()=>{
           // spend token and swoop
           pl.swoopTokens -= 1; renderScores();
-          performMoveWithPush(pc, d);
+          performMoveWithPush(pc, d, true); // isSwoop = true
           // Token swoop completes the action for this roll — exit roll context
           rolled=null; selectedPair=null; mode='preroll';
           clearHighlights();
@@ -1317,7 +1342,7 @@ function handleTailwindTopStepChoice(action){
     if (targets.length === 1) {
       // Auto-select single target
       const target = targets[0];
-      performMoveWithPush(actualPiece, target);
+      performMoveWithPush(actualPiece, target, true); // isSwoop = true
       toast(`Swooped to lane ${lanes[target.r].sum}!`);
     } else if (targets.length > 1) {
       // Let player choose swoop target
@@ -1360,7 +1385,7 @@ function handleTailwindSwoopChoice(target){
   const actualPiece = opp.pieces.find(p => p.r === tailwindPiece.r && p.step === tailwindPiece.step);
 
   if (actualPiece) {
-    performMoveWithPush(actualPiece, target);
+    performMoveWithPush(actualPiece, target, true); // isSwoop = true
     toast(`Swooped to lane ${lanes[target.r].sum}!`);
   }
 
