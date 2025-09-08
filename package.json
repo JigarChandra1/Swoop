@@ -7,6 +7,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "simulate": "node src/sim/simulate.js",
+    "ui:play": "node scripts/ui_autoplay.js",
+    "ui:play:watch": "HEADLESS=0 SLOW_MO=250 node scripts/ui_autoplay.js",
+    "ui:play:slow": "HEADLESS=0 SLOW_MO=400 TURN_PAUSE_MS=1500 node scripts/ui_autoplay.js",
     "test": "echo 'No tests defined' && exit 0",
     "deploy": "npm run build && gh-pages -d dist"
   },
@@ -17,6 +20,7 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^4.0.0",
     "autoprefixer": "^10.4.0",
+    "playwright": "^1.47.0",
     "postcss": "^8.4.0",
     "tailwindcss": "^3.3.0",
     "vite": "^4.4.0"
