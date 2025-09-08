@@ -691,10 +691,13 @@ function bank(game) {
         kept.push(pc);
       }
     } else {
-      let dest = null;
-      for (let s = pc.step; s >= 1; s--) { if (tileTypeAt(pc.r, s) === 'Checkpoint') { dest = s; break; } }
-      if (dest !== null) {
-        pc.step = dest;
+      // Keep pieces at Final step; otherwise slide to previous checkpoint
+      if (pc.step === L) {
+        kept.push(pc);
+      } else {
+        let dest = null;
+        for (let s = pc.step; s >= 1; s--) { if (tileTypeAt(pc.r, s) === 'Checkpoint') { dest = s; break; } }
+        if (dest !== null) pc.step = dest;
         kept.push(pc);
       }
     }

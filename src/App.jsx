@@ -1201,9 +1201,15 @@ export default function App(){
           kept.push(pc);
         }
       } else {
-        let dest=null;
-        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
-        if(dest!==null){ pc.step=dest; kept.push(pc); }
+        // If on Final step, stay put; otherwise slide to previous checkpoint
+        if(pc.step === L){
+          kept.push(pc);
+        } else {
+          let dest=null;
+          for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
+          if(dest!==null){ pc.step=dest; kept.push(pc); }
+          // If no checkpoint below, remove piece as before
+        }
       }
     }
 
@@ -1246,7 +1252,8 @@ export default function App(){
         continue;
       }
 
-      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint'){
+      // Treat Final step as a keep position too (do not slide off Final)
+      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint' || pc.step === LANES[pc.r].L){
         kept.push(pc);
         continue;
       }
@@ -1260,10 +1267,8 @@ export default function App(){
 
       if(dest===null){
         if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
-      } else {
-        pc.step=dest;
-        kept.push(pc);
-      }
+        // No checkpoint found: piece removed (original behavior)
+      } else { pc.step=dest; kept.push(pc); }
     }
 
     pl.pieces=kept;
