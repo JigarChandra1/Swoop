@@ -649,15 +649,23 @@ export default function App(){
   }
 
   // Push-chain helpers: snap‑down + basket transfer are handled in applyPushChain
-  function nearestValidStepDown(r, step){
-    let s = step;
-    while(s >= 1 && !tileExistsAt(r, s)) s--;
-    return s;
+  // Space helpers for geometric pushes
+  function tileTypeAtSpace(r, space){
+    const gs = Math.max(1, Math.min(MAX_STEP, space));
+    return TILE_MAP[r][gs-1] || 'Gap';
   }
-  function applyPushChain(origin, dest, newGame, pusher, isSwoop = false){
+  function snapDownSpace(r, space){
+    let sp = Math.max(1, Math.min(MAX_STEP, space));
+    while(sp >= 1 && tileTypeAtSpace(r, sp) === 'Gap') sp--;
+    return sp;
+  }
+  function applyPushChain(origin, dest, newGame, pusher, _isSwoop = false){
+    // Compute push vector in geometric space, not movement steps
+    const originSpace = mapStepToGrid(origin.r, origin.step);
+    const destSpace   = mapStepToGrid(dest.r, dest.step);
+    const dSpace = destSpace - originSpace;
     const dr = dest.r - origin.r;
-    const ds = isSwoop ? 0 : (dest.step - origin.step); // For swoops, don't push in step direction
-    if(dr===0 && ds===0) return;
+    if(dr===0 && dSpace===0) return;
     // find occupant at dest
     let occPi = -1, occPc = null;
     for(let pi=0; pi<newGame.players.length; pi++){
@@ -676,16 +684,20 @@ export default function App(){
       pl.pieces = pl.pieces.filter(p=>p!==occPc);
       return;
     }
-    const L2 = LANES[r2].L;
-    let s2 = dest.step + ds;
-    s2 = Math.max(1, Math.min(L2, s2));
-    s2 = nearestValidStepDown(r2, s2);
-    if(s2 < 1){
+    // Target space for the pushed piece using geometric delta
+    let targetSpace = destSpace + dSpace;
+    targetSpace = Math.max(1, Math.min(MAX_STEP, targetSpace));
+
+    // If the landing space is a gap, apply snap-down along spaces
+    let landedSpace = tileTypeAtSpace(r2, targetSpace) === 'Gap' ? snapDownSpace(r2, targetSpace) : targetSpace;
+    if(landedSpace < 1){
       const pl = newGame.players[occPi];
       pl.pieces = pl.pieces.filter(p=>p!==occPc);
       return;
     }
-    applyPushChain(dest, {r:r2, step:s2}, newGame, occPc, isSwoop);
+    // Convert final landing space back to a movement step on lane r2
+    const s2 = stepForSpace(r2, landedSpace);
+    applyPushChain(dest, {r:r2, step:s2}, newGame, occPc);
     occPc.r = r2; occPc.step = s2;
   }
 

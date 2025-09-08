@@ -70,6 +70,15 @@ function tileTypeAt(r, step){
   return TILE_MAP[r][gs-1] || 'Gap';
 }
 function tileExistsAt(r, step){ return tileTypeAt(r, step) !== 'Gap'; }
+function tileTypeAtSpace(r, space){
+  const gs = Math.max(1, Math.min(MAX_STEP, space));
+  return TILE_MAP[r][gs-1] || 'Gap';
+}
+function snapDownSpace(r, space){
+  let sp = Math.max(1, Math.min(MAX_STEP, space));
+  while (sp >= 1 && tileTypeAtSpace(r, sp) === 'Gap') sp--;
+  return sp;
+}
 
 function stepForSpace(r, space) {
   // Find the best movement step for a given geometric space
@@ -419,10 +428,13 @@ function returnBasketToTop(game, r){
   game.baskets[r] = true;
 }
 
-function applyPushChain(game, origin, dest, pusher, isSwoop = false){
+function applyPushChain(game, origin, dest, pusher, _isSwoop = false){
+  // Use geometric spaces for push vectors
+  const originSpace = mapStepToGrid(origin.r, origin.step);
+  const destSpace   = mapStepToGrid(dest.r, dest.step);
+  const dSpace = destSpace - originSpace;
   const dr = dest.r - origin.r;
-  const ds = isSwoop ? 0 : (dest.step - origin.step); // For swoops, don't push in step direction
-  if(dr===0 && ds===0) return;
+  if (dr===0 && dSpace===0) return;
   // find occupant at dest
   let occPi=-1, occPc=null;
   for(let pi=0; pi<game.players.length; pi++){
@@ -438,16 +450,18 @@ function applyPushChain(game, origin, dest, pusher, isSwoop = false){
     owner.pieces = owner.pieces.filter(p=>p!==occPc);
     return;
   }
-  const L2 = LANES[r2].L;
-  let s2 = dest.step + ds;
-  s2 = Math.max(1, Math.min(L2, s2));
-  s2 = (function(){ let x=s2; while(x>=1 && !tileExistsAt(r2,x)) x--; return x; })();
-  if(s2 < 1){
+  // Compute target space for pushed piece
+  let targetSpace = destSpace + dSpace;
+  targetSpace = Math.max(1, Math.min(MAX_STEP, targetSpace));
+  // If that space is a gap, snap down along spaces
+  let landedSpace = tileTypeAtSpace(r2, targetSpace) === 'Gap' ? snapDownSpace(r2, targetSpace) : targetSpace;
+  if(landedSpace < 1){
     const owner = game.players[occPi];
     owner.pieces = owner.pieces.filter(p=>p!==occPc);
     return;
   }
-  applyPushChain(game, dest, { r: r2, step: s2 }, occPc, isSwoop);
+  const s2 = stepForSpace(r2, landedSpace);
+  applyPushChain(game, dest, { r: r2, step: s2 }, occPc);
   occPc.r = r2; occPc.step = s2;
 }
 

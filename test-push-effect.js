@@ -40,10 +40,14 @@ function tileTypeAt(r, step){
 }
 function tileExistsAt(r, step){ return tileTypeAt(r, step) !== 'Gap'; }
 
-function nearestValidStepDown(r, step){
-  let s = step;
-  while(s >= 1 && !tileExistsAt(r, s)) s--;
-  return s;
+function tileTypeAtSpace(r, space){
+  const gs = Math.max(1, Math.min(MAX_STEP, space));
+  return TILE_MAP[r][gs-1] || 'Gap';
+}
+function snapDownSpace(r, space){
+  let sp = Math.max(1, Math.min(MAX_STEP, space));
+  while(sp >= 1 && tileTypeAtSpace(r, sp) === 'Gap') sp--;
+  return sp;
 }
 
 function afterMovePickup(pc, newGame){
@@ -56,10 +60,13 @@ function afterMovePickup(pc, newGame){
   return false;
 }
 
-function applyPushChain(origin, dest, newGame, pusher, isSwoop = false){
+function applyPushChain(origin, dest, newGame, pusher, _isSwoop = false){
+  // Geometric push: compute vector in space coordinates
+  const originSpace = mapStepToGrid(origin.r, origin.step);
+  const destSpace   = mapStepToGrid(dest.r, dest.step);
+  const dSpace = destSpace - originSpace;
   const dr = dest.r - origin.r;
-  const ds = isSwoop ? 0 : (dest.step - origin.step);
-  if(dr===0 && ds===0) return;
+  if(dr===0 && dSpace===0) return;
   let occPi = -1, occPc = null;
   for(let pi=0; pi<newGame.players.length; pi++){
     const pl = newGame.players[pi];
@@ -76,16 +83,21 @@ function applyPushChain(origin, dest, newGame, pusher, isSwoop = false){
     pl.pieces = pl.pieces.filter(p=>p!==occPc);
     return;
   }
-  const L2 = LANES[r2].L;
-  let s2 = dest.step + ds;
-  s2 = Math.max(1, Math.min(L2, s2));
-  s2 = nearestValidStepDown(r2, s2);
-  if(s2 < 1){
+  let targetSpace = destSpace + dSpace;
+  targetSpace = Math.max(1, Math.min(MAX_STEP, targetSpace));
+  let landedSpace = tileTypeAtSpace(r2, targetSpace) === 'Gap' ? snapDownSpace(r2, targetSpace) : targetSpace;
+  if(landedSpace < 1){
     const pl = newGame.players[occPi];
     pl.pieces = pl.pieces.filter(p=>p!==occPc);
     return;
   }
-  applyPushChain(dest, {r:r2, step:s2}, newGame, occPc, isSwoop);
+  const s2 = (function stepForSpace(r, space){
+    const L = LANES[r].L;
+    for(let s=1; s<=L; s++){ if(mapStepToGrid(r, s)===landedSpace && tileExistsAt(r,s)) return s; }
+    let best=null, min=Infinity; for(let s=1; s<=L; s++){ if(tileExistsAt(r,s)){ const d=Math.abs(mapStepToGrid(r,s)-landedSpace); if(d<min){min=d; best=s;} } }
+    return best;
+  })(r2, landedSpace);
+  applyPushChain(dest, {r:r2, step:s2}, newGame, occPc);
   occPc.r = r2; occPc.step = s2;
 }
 
@@ -124,15 +136,38 @@ function findSnapDownScenario() {
       const destR = r + 1; // occupant lane
       const pushToR = destR + 1; // where occupant will be pushed on swoop (dr=+1)
       if (pushToR >= LANES.length) continue;
-      if (!tileExistsAt(pushToR, s)) {
-        const snapped = nearestValidStepDown(pushToR, s);
-        if (snapped >= 1) {
-          return { origin: {r, s}, dest: {r: destR, s}, pushTo: {r: pushToR, s}, snapped };
+      // Use spaces to determine if the landing is a gap
+      const originSpace = mapStepToGrid(r, s);
+      const destSpace = mapStepToGrid(destR, s);
+      const dSpace = destSpace - originSpace; // swoop keeps same space here
+      const targetSpace = destSpace + dSpace; // equals destSpace
+      if (tileTypeAtSpace(pushToR, targetSpace) === 'Gap') {
+        const snappedSpace = snapDownSpace(pushToR, targetSpace);
+        if (snappedSpace >= 1) {
+          // Convert snapped space into a step for expectation display
+          const snappedStep = (function(r, space){
+            const L = LANES[r].L; let best=null,min=Infinity; for(let st=1; st<=L; st++){ const sp=mapStepToGrid(r,st); if(sp===space) return st; const d=Math.abs(sp-space); if(d<min){min=d; best=st;} } return best; })(pushToR, snappedSpace);
+          return { origin: {r, s}, dest: {r: destR, s}, pushTo: {r: pushToR, s}, snapped: snappedStep };
         }
       }
     }
   }
   return null;
+}
+
+// New explicit test for the reported diagonal case (10→9 pushes to 8 and snaps to step 1)
+function testReportedDiagonalCase(){
+  const game = createTestGame();
+  const lane10 = 8; // index for sum 10
+  const lane9  = 7; // index for sum 9
+  const lane8  = 6; // index for sum 8
+  game.players[0].pieces.push({r:lane10, step:2, carrying:false, active:true, id:'P1'});
+  game.players[1].pieces.push({r:lane9,  step:2, carrying:false, active:true, id:'P2'});
+  const pusher = game.players[0].pieces[0];
+  const pushed = game.players[1].pieces[0];
+  performMoveWithPush(pusher, {r:lane9, step:2}, game, true); // diagonal swoop-like push vector
+  const ok = assert(pushed.r === lane8 && pushed.step === 1, 'Reported case: pushed piece ends at lane 8, step 1');
+  if(!ok){ console.log('Observed:', pushed); }
 }
 
 function runPushEffectTests() {
@@ -232,6 +267,9 @@ function runPushEffectTests() {
   } else {
     console.log('Skipping Test 6: No snap-down scenario found with current TILE_MAP');
   }
+
+  // Test Case 7: Explicit diagonal example from user report
+  testReportedDiagonalCase();
 
   console.log('\nAll Push Effect Tests Completed.');
 }
