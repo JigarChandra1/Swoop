@@ -210,6 +210,16 @@ function runPushEffectTests() {
   assert(occA && occA.step === 5, 'Test 2.2: First occupant pushed forward');
   assert(occB && occB.step === 6, 'Test 2.3: Second occupant pushed forward in chain');
 
+  // Test Case 2a: Same-lane push from step 1→2 with occupant at 2 should move it to 3
+  let game2a = createTestGame();
+  const r2a = 5; // L=8
+  game2a.players[0].pieces.push({r:r2a, step:1, carrying:false, active:true, id:'P1-1'});
+  game2a.players[1].pieces.push({r:r2a, step:2, carrying:false, active:true, id:'P2-1'});
+  const pusher2a = game2a.players[0].pieces[0];
+  const pushed2a = game2a.players[1].pieces[0];
+  performMoveWithPush(pusher2a, {r:r2a, step:2}, game2a);
+  assert(pushed2a.step === 3, 'Test 2a: Occupant at step 2 pushed forward to step 3');
+
   // Test Case 3: Sideways at top step pushes occupant off-board (removal)
   // Move from lane 9 top step to lane 10 top step; occupant at lane 10 top should be removed (push beyond bounds)
   let game3 = createTestGame();
