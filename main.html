@@ -83,6 +83,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <button id="bankBtn" disabled>Bank (Stop)</button>
     <span style="flex:1"></span>
     <button id="newBtn" class="ghost">New Game</button>
+    <button id="undoBtn" class="ghost">Undo</button>
     <button id="saveBtn" class="ghost">Save</button>
     <button id="loadBtn" class="ghost">Load</button>
     <button id="qsaveBtn" class="ghost">Quick Save</button>
@@ -320,6 +321,7 @@ const qloadBtn=document.getElementById('qloadBtn');
 const diceRow=document.getElementById('diceRow');
 const pairRow=document.getElementById('pairRow');
 const toastEl=document.getElementById('toast');
+const undoBtn=document.getElementById('undoBtn');
 
 /* ---------- UI helpers ---------- */
 function toast(m){ toastEl.textContent=m; toastEl.style.display='block'; setTimeout(()=>toastEl.style.display='none',1500); }
@@ -408,7 +410,24 @@ function canSwoopNow(){
 function anyMandatoryActionThisRoll(){ return existsAnyMoveThisRoll(); }
 function anyActionThisRoll(){ return existsAnyMoveThisRoll() || canSwoopNow(); }
 
+// Autosave + History
+let __history = [];
+let __prevSnapshot = null;
+let __isUndoing = false;
+function autosave(){
+  try { localStorage.setItem('SWOOP_STATE_V52', JSON.stringify(getState())); } catch(e){}
+}
+function captureHistory(){
+  const curr = JSON.stringify(getState());
+  if(__prevSnapshot === null){ __prevSnapshot = curr; return; }
+  if(!__isUndoing){
+    try{ __history.push(JSON.parse(__prevSnapshot)); if(__history.length>100) __history.shift(); }catch(e){}
+  } else { __isUndoing = false; }
+  __prevSnapshot = curr;
+}
+
 function render(){
+  captureHistory();
   clearPieces(); placePieces(); renderScores();
 
   // Handle game over mode
@@ -451,6 +470,8 @@ function render(){
       bankBtn.disabled = false;
     }
   }else{ bankBtn.textContent='Bank (Stop)'; bankBtn.disabled=!(mode==='preroll'); }
+  // Auto save after each UI render/state change
+  autosave();
 }
 
 /* ---------- Start/Next ---------- */
@@ -1553,6 +1574,13 @@ saveBtn.onclick = saveToFile;
 loadBtn.onclick = openLoadModal;
 qsaveBtn.onclick = quickSave;
 qloadBtn.onclick = quickLoad;
+undoBtn.onclick = ()=>{
+  if(!__history.length){ toast('Nothing to undo.'); return; }
+  const prev = __history.pop();
+  __isUndoing = true;
+  setState(prev);
+  toast('Undid last action.');
+};
 
 /* ---------- Kickoff ---------- */
 startGame();

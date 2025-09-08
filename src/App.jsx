@@ -133,6 +133,46 @@ export default function App(){
   const [showLoadModal, setShowLoadModal] = React.useState(false);
   const [loadText, setLoadText] = React.useState('');
 
+  // Undo history (stack of prior snapshots) and bookkeeping
+  const historyRef = React.useRef([]); // array of snapshot objects from getState()
+  const prevSnapshotRef = React.useRef(null); // JSON string of previous snapshot
+  const isUndoingRef = React.useRef(false);
+
+  // Auto Quick-Save + History capture: persist on any state change and push previous snapshot to history
+  React.useEffect(() => {
+    const currJson = JSON.stringify(getState());
+
+    if (prevSnapshotRef.current === null) {
+      // First render: set previous snapshot baseline
+      prevSnapshotRef.current = currJson;
+    } else {
+      if (!isUndoingRef.current) {
+        try {
+          const prevObj = JSON.parse(prevSnapshotRef.current);
+          historyRef.current.push(prevObj);
+          if (historyRef.current.length > 100) historyRef.current.shift(); // cap history
+        } catch (e) { /* ignore */ }
+      } else {
+        // Completed an undo action; clear flag
+        isUndoingRef.current = false;
+      }
+      prevSnapshotRef.current = currJson;
+    }
+
+    try { localStorage.setItem('SWOOP_STATE_V53', currJson); } catch (e) {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game]);
+
+  function undo(){
+    const hist = historyRef.current;
+    if (!hist || hist.length === 0) { showToast('Nothing to undo.'); return; }
+    const prev = hist.pop();
+    // Prevent pushing to history during this state restore
+    isUndoingRef.current = true;
+    setState(prev, { silent: true });
+    showToast('Undid last action.');
+  }
+
   function showToast(message) {
     setToast(message);
     setTimeout(() => setToast(null), 1500);
@@ -1340,9 +1380,10 @@ export default function App(){
     };
   }
 
-  function setState(state){
-    try{
-      const newGame = {
+function setState(state, options = {}){
+  const silent = !!options.silent;
+  try{
+    const newGame = {
         players: [
           {
             name: 'Monkeys',
@@ -1371,12 +1412,12 @@ export default function App(){
         transferTargets: state.transferTargets || null
       };
       setGame(newGame);
-      showToast('Game loaded successfully!');
+      if(!silent) showToast('Game loaded successfully!');
     }catch(e){
       console.error(e);
       showToast('Invalid save file.');
     }
-  }
+}
 
   function saveToFile(){
     const blob = new Blob([JSON.stringify(getState(), null, 2)], {type:'application/json'});
@@ -1845,6 +1886,7 @@ export default function App(){
           {/* Secondary Controls */}
           <div className="mobile-secondary-controls">
             <button className="mobile-button-small" onClick={newGame}>🔄 New</button>
+            <button className="mobile-button-small" onClick={undo}>↩️ Undo</button>
             <button className="mobile-button-small" onClick={saveToFile}>💾 Save</button>
             <button className="mobile-button-small" onClick={openLoadModal}>📁 Load</button>
             <button className="mobile-button-small" onClick={quickSave}>⚡ Quick Save</button>
