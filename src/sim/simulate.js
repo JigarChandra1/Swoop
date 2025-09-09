@@ -780,13 +780,14 @@ function r6(rng) {
   return 1 + Math.floor(rng() * 6);
 }
 
-function roll3(rng) {
-  const d = [r6(rng), r6(rng), r6(rng)];
-  const pairs = [
-    { i: 0, j: 1, sum: d[0] + d[1] },
-    { i: 0, j: 2, sum: d[0] + d[2] },
-    { i: 1, j: 2, sum: d[1] + d[2] },
-  ];
+function roll4(rng) {
+  const d = [r6(rng), r6(rng), r6(rng), r6(rng)];
+  const pairs = [];
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      pairs.push({ i, j, sum: d[i] + d[j] });
+    }
+  }
   return { d, pairs };
 }
 
@@ -797,8 +798,8 @@ function chooseActionBot1(ctx) {
   const pl = game.players[game.current];
   const { pairs } = ctx.roll;
 
-  // Filter pairs with any available action
-  const usable = pairs.filter((p) => anyActionForSum(game, pl, p.sum));
+  // Filter pairs with an available MOVE action (prefer using pairs for movement)
+  const usable = pairs.filter((p) => canMoveOnSum(game, pl, p.sum));
   if (usable.length === 0) return { type: 'bust' };
 
   // Sort by: odd desc weight then sum desc
@@ -812,7 +813,7 @@ function chooseActionBot1(ctx) {
   const chosen = usable[0];
 
   // Prefer Move if possible on chosen odd, else Swoop
-  if (canMoveOnSum(game, pl, chosen.sum)) return { type: 'move', sum: chosen.sum };
+  if (canMoveOnSum(game, pl, chosen.sum)) return { type: 'move', sum: chosen.sum, pair: chosen };
   // Choose a swoop target that ends on a lane with higher odd sum if possible
   const pcs = eligibleSwoopPiecesForSum(game, pl, chosen.sum);
   for (const pc of pcs) {
@@ -839,7 +840,7 @@ function chooseActionBot2(ctx) {
   const pl = game.players[game.current];
   const { pairs } = ctx.roll;
 
-  const usable = pairs.filter((p) => anyActionForSum(game, pl, p.sum));
+  const usable = pairs.filter((p) => canMoveOnSum(game, pl, p.sum));
   if (usable.length === 0) return { type: 'bust' };
 
   const preferEven = rng() < 0.5;
@@ -856,7 +857,7 @@ function chooseActionBot2(ctx) {
   const canMove = canMoveOnSum(game, pl, chosen.sum);
   const canSwoop = canSwoopWithSum(game, pl, chosen.sum);
   if (canMove && canSwoop) {
-    if (rng() < 0.6) return { type: 'move', sum: chosen.sum }; // slight tilt to move
+    if (rng() < 0.6) return { type: 'move', sum: chosen.sum, pair: chosen }; // slight tilt to move
     // pick random eligible swoop
     const pcs = eligibleSwoopPiecesForSum(game, pl, chosen.sum).filter((pc) => potentialSwoops(game, pc).length > 0);
     const pc = pcs[Math.floor(rng() * pcs.length)];
@@ -864,7 +865,7 @@ function chooseActionBot2(ctx) {
     const target = targs[Math.floor(rng() * targs.length)];
     return { type: 'swoop', sum: chosen.sum, pc, target };
   }
-  if (canMove) return { type: 'move', sum: chosen.sum };
+  if (canMove) return { type: 'move', sum: chosen.sum, pair: chosen };
   if (canSwoop) {
     const pcs = eligibleSwoopPiecesForSum(game, pl, chosen.sum).filter((pc) => potentialSwoops(game, pc).length > 0);
     const pc = pcs[Math.floor(rng() * pcs.length)];
@@ -954,7 +955,7 @@ function playTurn(game, bots, rng, metrics, targetScore) {
 
   // Loop rolling until bank or bust
   while (true) {
-    const roll = roll3(rng);
+    const roll = roll4(rng);
     metrics.rolls++;
 
     // Log dice roll
@@ -966,18 +967,33 @@ function playTurn(game, bots, rng, metrics, targetScore) {
       turn: game.moveHistory.filter(m => m.type === 'turn_start').length
     });
 
-    // Check if any pair can do anything at all
-    const usable = roll.pairs.filter((p) => anyActionForSum(game, pl, p.sum));
+    // Check if any pair can MOVE at all (we prioritize pair-based moves); if none, consider swoop or bust
+    const usable = roll.pairs.filter((p) => canMoveOnSum(game, pl, p.sum));
     if (usable.length === 0) {
-      // Bust
-      // Apply bust consequences similar to bank minus sliding outward (we follow app behavior: skip slide, apply dets, deliveries, deactivate)
-      const delivered = applyBust(game);
-      turnStats.deliveredThisTurn += delivered;
-      metrics.busts++;
-      metrics.deliveries += delivered;
-      metrics.turns++;
-      metrics.turnsByPlayer[game.current]++;
-      return;
+      // If no move exists, try a token swoop; otherwise, Bust
+      if (canSwoopWithSum(game, pl, 0)) {
+        const pcs = eligibleSwoopPiecesForSum(game, pl, 0).filter((pc) => potentialSwoops(game, pc).length > 0);
+        if (pcs.length > 0) {
+          const pc = pcs[Math.floor(rng() * pcs.length)];
+          const targs = potentialSwoops(game, pc);
+          const target = targs[Math.floor(rng() * targs.length)];
+          if (pl.swoopTokens > 0) pl.swoopTokens -= 1;
+          const oldR = pc.r, oldStep = pc.step;
+          performMoveWithPush(game, pc, target, true);
+          game.moveHistory.push({ type: 'swoop', player: game.current, piece: { from: { r: oldR, step: oldStep }, to: { r: pc.r, step: pc.step } }, sum: 0, carrying: pc.carrying, turn: game.moveHistory.filter(m => m.type === 'turn_start').length });
+          turnStats.swoops++; turnStats.actionsThisTurn++;
+        } else {
+          const delivered = applyBust(game);
+          turnStats.deliveredThisTurn += delivered;
+          metrics.busts++; metrics.deliveries += delivered; metrics.turns++; metrics.turnsByPlayer[game.current]++;
+          return;
+        }
+      } else {
+        const delivered = applyBust(game);
+        turnStats.deliveredThisTurn += delivered;
+        metrics.busts++; metrics.deliveries += delivered; metrics.turns++; metrics.turnsByPlayer[game.current]++;
+        return;
+      }
     }
 
     const ctx = { game, rng, roll };
@@ -1051,6 +1067,56 @@ function playTurn(game, bots, rng, metrics, targetScore) {
           // freshly ensured; counts as action in our accounting
           turnStats.moves++;
           turnStats.actionsThisTurn++;
+        }
+      }
+
+      // Attempt a second move with the remaining two dice (if any)
+      if (decision.pair && roll.d.length === 4) {
+        const used = new Set([decision.pair.i, decision.pair.j]);
+        const rem = [0,1,2,3].filter(k => !used.has(k));
+        if (rem.length === 2) {
+          const secondPair = { i: rem[0], j: rem[1], sum: roll.d[rem[0]] + roll.d[rem[1]] };
+          if (canMoveOnSum(game, pl, secondPair.sum)) {
+            // Mirror the move logic for the second pair
+            const pc2 = ensurePieceForSum(game, pl, secondPair.sum);
+            if (pc2) {
+              const had2 = pc2.step;
+              const L2 = LANES[pc2.r].L;
+              if (pc2.step === L2 && had2 === L2) {
+                const action2 = chooseTopStepAction(game, pc2);
+                if (action2 === 'move_down' && canTopStepMoveDown(game, pc2)) {
+                  if (moveTopStepDown(game, pc2)) {
+                    turnStats.moves++; turnStats.actionsThisTurn++;
+                  }
+                } else if (action2 === 'free_swoop') {
+                  const t2 = potentialTopStepSwoops(game, pc2);
+                  if (t2.length > 0) {
+                    const tgt2 = chooseBestTopStepSwoopTarget(t2, pc2);
+                    if (performTopStepFreeSwoop(game, pc2, tgt2)) {
+                      turnStats.swoops++; turnStats.actionsThisTurn++;
+                    }
+                  }
+                }
+              } else if (pieceOnLane(pl, pc2.r) && pc2.step === had2) {
+                const opts2 = moveTargets(game, pc2).filter(t => t.r === pc2.r);
+                let chosen2 = null;
+                if (opts2.length === 1) chosen2 = opts2[0];
+                else if (opts2.length > 1) {
+                  const up2 = opts2.find(o => o.step === had2 + 1);
+                  const down2 = opts2.find(o => o.step === had2 - 1);
+                  chosen2 = pc2.carrying ? (down2 || up2) : (up2 || down2);
+                }
+                if (chosen2) {
+                  const before2 = { r: pc2.r, step: pc2.step };
+                  performMoveWithPush(game, pc2, chosen2);
+                  game.moveHistory.push({ type: 'move', player: game.current, piece: { r: pc2.r, from: before2.step, to: pc2.step }, carrying: pc2.carrying, turn: game.moveHistory.filter(m => m.type === 'turn_start').length });
+                  turnStats.moves++; turnStats.actionsThisTurn++;
+                }
+              } else {
+                turnStats.moves++; turnStats.actionsThisTurn++;
+              }
+            }
+          }
         }
       }
     } else if (decision.type === 'swoop') {
@@ -1404,7 +1470,7 @@ function chooseActionConservative(ctx) {
   const pl = game.players[game.current];
   const { pairs } = ctx.roll;
 
-  const usable = pairs.filter((p) => anyActionForSum(game, pl, p.sum));
+  const usable = pairs.filter((p) => canMoveOnSum(game, pl, p.sum));
   if (usable.length === 0) return { type: 'bust' };
 
   // Prefer highest sum (simple and safe)
@@ -1412,7 +1478,7 @@ function chooseActionConservative(ctx) {
   const chosen = usable[0];
 
   // Prefer Move over Swoop (conservative)
-  if (canMoveOnSum(game, pl, chosen.sum)) return { type: 'move', sum: chosen.sum };
+  if (canMoveOnSum(game, pl, chosen.sum)) return { type: 'move', sum: chosen.sum, pair: chosen };
 
   // Only swoop if no move available
   const pcs = eligibleSwoopPiecesForSum(game, pl, chosen.sum);
