@@ -225,6 +225,8 @@ export default function App(){
 
   function anyActionThisRoll(){
     // Any action includes advancing via a valid pairing or spending a Swoop token
+    // NOTE: Used for UI hints only. During an active roll, banking is not allowed;
+    // if no legal moves exist, the only outcome is Bust (even if a token Swoop is possible).
     if(game.mode === 'rolled') {
       return existsAnyMoveThisRoll() || canSwoopNow();
     }
@@ -328,7 +330,7 @@ export default function App(){
         newGame.message = `${pl.name}: Roll or Bank.`;
       }
     } else if(previousMode === 'rolled'){
-      newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+      newGame.message = `${pl.name}: Choose a pair to move or Bust.`;
     } else if(previousMode === 'pairChosen'){
       const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
       const canSwoop = canSwoopNow();
@@ -358,7 +360,7 @@ export default function App(){
         newGame.message = `${pl.name}: Roll or Bank.`;
       }
     } else if(previousMode === 'rolled'){
-      newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+      newGame.message = `${pl.name}: Choose a pair to move or Bust.`;
     } else if(previousMode === 'pairChosen'){
       const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
       const canSwoop = canSwoopNow();
@@ -1310,7 +1312,7 @@ export default function App(){
   }
 
   function bank(){
-    // Allow banking at any time (including between first and optional second pair)
+    // Banking is only applied when not in the middle of a roll
     const newGame = {...game, baskets: [...game.baskets]};
     const pl=newGame.players[newGame.current];
     const kept=[];
@@ -1427,18 +1429,15 @@ export default function App(){
   }
 
   function bankOrBust(){
-    if(game.mode==='preroll') bank();
-    else if(game.mode==='rolled' || game.mode==='pairChosen') {
-      if(anyMandatoryActionThisRoll()) {
-        // Should not happen as button should be disabled, but just in case
-        return;
-      } else if(anyActionThisRoll()) {
-        // Has optional actions (swoop), but player chooses to bank
-        bank();
-      } else {
-        // No actions available, must bust
-        bust();
+    if(game.mode==='preroll') {
+      bank();
+    } else if(game.mode==='rolled' || game.mode==='pairChosen') {
+      // During an active roll: if any legal move exists, banking is disallowed (button disabled).
+      // If no legal moves exist, the turn ends in a Bust regardless of optional Swoop availability.
+      if(anyMandatoryActionThisRoll()){
+        return; // UI should have disabled this
       }
+      bust();
     }
   }
 
@@ -1897,9 +1896,8 @@ function setState(state, options = {}){
                 if (game.mode === 'preroll') return '🏦 Bank';
                 if (game.mode === 'rolled' || game.mode === 'pairChosen') {
                   const mandatory = anyMandatoryActionThisRoll();
-                  const any = anyActionThisRoll();
                   if (mandatory) return '❌ Must Move';
-                  if (any) return '🏦 Bank';
+                  // During a roll with no legal moves, only Bust is allowed
                   return '💥 Bust';
                 }
                 return '🏦 Bank';

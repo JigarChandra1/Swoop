@@ -88,6 +88,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <button id="loadBtn" class="ghost">Load</button>
     <button id="qsaveBtn" class="ghost">Quick Save</button>
     <button id="qloadBtn" class="ghost">Quick Load</button>
+    <button id="testBugBtn" class="ghost" style="background: #ff6b6b; color: white;">Test Bug</button>
+    <button id="debugBtn" class="ghost" style="background: #4ecdc4; color: white;">Debug</button>
   </div>
 
   <div class="dice" id="diceRow"></div>
@@ -405,14 +407,18 @@ function tryPickupBasket(pc){
 function canSwoopNow(){
   const pl=players[current];
   if(!(pl.swoopTokens>0)) return false;
-  for(const pc of pl.pieces){ if(pc.active && potentialSwoops(pc).length>0) return true; }
+  for(const pc of pl.pieces){
+    if(pc.active && potentialSwoops(pc).length>0) return true;
+  }
   return false;
 }
 function anyMandatoryActionThisRoll(){
-  // Must take at least one move if possible; second move is optional
-  return rollMovesDone===0 && existsAnyMoveThisRoll();
+  // Must take at least one action if possible (dice move OR swoop); subsequent actions are optional
+  return rollMovesDone===0 && (existsAnyMoveThisRoll() || canSwoopNow());
 }
-function anyActionThisRoll(){ return existsAnyMoveThisRoll() || canSwoopNow(); }
+function anyActionThisRoll(){
+  return existsAnyMoveThisRoll() || canSwoopNow();
+}
 
 // Autosave + History
 let __history = [];
@@ -463,8 +469,18 @@ function render(){
   if(mode==='rolled' || mode==='pairChosen'){
     const mandatory = anyMandatoryActionThisRoll();
     const any = anyActionThisRoll();
+    const hasMove = existsAnyMoveThisRoll();
+    const hasSwoop = canSwoopNow();
+
     if(mandatory) {
-      bankBtn.textContent = 'Must Move';
+      // Must take an action - could be move or swoop
+      if(hasMove && hasSwoop) {
+        bankBtn.textContent = 'Must Move or Swoop';
+      } else if(hasMove) {
+        bankBtn.textContent = 'Must Move';
+      } else if(hasSwoop) {
+        bankBtn.textContent = 'Must Swoop';
+      }
       bankBtn.disabled = true;
     } else if(any) {
       bankBtn.textContent = 'Bank (Stop)';
@@ -517,6 +533,7 @@ function renderDiceAndPairs(){
   });
 }
 function roll4(){
+
   const d=[r6(),r6(),r6(),r6()];
   const pairs=[];
   for(let i=0;i<4;i++) for(let j=i+1;j<4;j++) pairs.push({i,j,sum:d[i]+d[j]});
@@ -1576,6 +1593,134 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
 function quickSave(){ localStorage.setItem('SWOOP_STATE_V60', JSON.stringify(getState())); toast('Saved to browser.'); }
 function quickLoad(){ const txt = localStorage.getItem('SWOOP_STATE_V60'); if(!txt){ toast('No quick save found.'); return; } loadFromText(txt); }
 
+/* ---------- Test function for debugging ---------- */
+function createBugTestScenario(){
+  // Load the exact game state from the saved file to reproduce the bug
+  const savedState = {
+    "version": "v6.0",
+    "players": [
+      {
+        "name": "Monkeys",
+        "pieceIcon": "🐒",
+        "activeIcon": "🐵",
+        "score": 0,
+        "swoopTokens": 1,
+        "pieces": [
+          {
+            "r": 4,
+            "step": 7,
+            "carrying": true,
+            "active": false
+          }
+        ]
+      },
+      {
+        "name": "Seagulls",
+        "pieceIcon": "🕊️",
+        "activeIcon": "🦅",
+        "score": 0,
+        "swoopTokens": 2,
+        "pieces": [
+          {
+            "r": 5,
+            "step": 5,
+            "carrying": false,
+            "active": true
+          },
+          {
+            "r": 6,
+            "step": 6,
+            "carrying": false,
+            "active": false
+          },
+          {
+            "r": 7,
+            "step": 1,
+            "carrying": false,
+            "active": true
+          }
+        ]
+      }
+    ],
+    "current": 1,
+    "mode": "rolled",
+    "rolled": {
+      "d": [2, 4, 2, 1],
+      "pairs": [
+        {"i": 0, "j": 1, "sum": 6},
+        {"i": 0, "j": 2, "sum": 4},
+        {"i": 0, "j": 3, "sum": 3},
+        {"i": 1, "j": 2, "sum": 6},
+        {"i": 1, "j": 3, "sum": 5},
+        {"i": 2, "j": 3, "sum": 3}
+      ]
+    },
+    "selectedPair": null
+  };
+
+  // Load the state
+  setState(savedState);
+
+  console.log('=== LOADED BUG SCENARIO ===');
+  console.log('Current player:', players[current].name);
+  console.log('Active pieces:', players[current].pieces.filter(p => p.active));
+  console.log('Swoop tokens:', players[current].swoopTokens);
+  console.log('Roll moves done:', rollMovesDone);
+
+  const hasMove = existsAnyMoveThisRoll();
+  const hasSwoop = canSwoopNow();
+  const mandatory = anyMandatoryActionThisRoll();
+  const any = anyActionThisRoll();
+
+  console.log('existsAnyMoveThisRoll():', hasMove);
+  console.log('canSwoopNow():', hasSwoop);
+  console.log('anyMandatoryActionThisRoll():', mandatory);
+  console.log('anyActionThisRoll():', any);
+
+  console.log('=== EXPECTED BEHAVIOR ===');
+  if(mandatory) {
+    console.log('Expected: Button should be disabled and show "Must Move or Swoop" or "Must Swoop"');
+  } else if(any) {
+    console.log('Expected: Button should show "Bank (Stop)"');
+  } else {
+    console.log('Expected: Button should show "End Turn (Busted)"');
+  }
+}
+
+function debugCurrentState(){
+  console.log('=== DEBUG CURRENT STATE ===');
+  console.log('Current player:', players[current].name);
+  console.log('Mode:', mode);
+  console.log('Rolled:', rolled);
+
+  const pl = players[current];
+  console.log('Player pieces:');
+  pl.pieces.forEach((pc, i) => {
+    console.log(`  Piece ${i}: r=${pc.r} step=${pc.step} active=${pc.active} carrying=${pc.carrying}`);
+  });
+  console.log('Swoop tokens:', pl.swoopTokens);
+
+  console.log('=== FUNCTION RESULTS ===');
+  const hasMove = existsAnyMoveThisRoll();
+  const hasSwoop = canSwoopNow();
+  const hasAny = anyActionThisRoll();
+  const mandatory = anyMandatoryActionThisRoll();
+
+  console.log('existsAnyMoveThisRoll():', hasMove);
+  console.log('canSwoopNow():', hasSwoop);
+  console.log('anyActionThisRoll():', hasAny);
+  console.log('anyMandatoryActionThisRoll():', mandatory);
+
+  console.log('=== EXPECTED BEHAVIOR ===');
+  if(mandatory) {
+    console.log('Expected: "Must Move" (button disabled)');
+  } else if(hasAny) {
+    console.log('Expected: "Bank (Stop)" (button enabled)');
+  } else {
+    console.log('Expected: "End Turn (Busted)" (button enabled)');
+  }
+}
+
 /* ---------- Wire up buttons ---------- */
 rollBtn.onclick = ()=>{ if(mode!=='preroll') return; roll4(); };
 useMoveBtn.onclick = ()=> usePairForMove();
@@ -1599,6 +1744,8 @@ saveBtn.onclick = saveToFile;
 loadBtn.onclick = openLoadModal;
 qsaveBtn.onclick = quickSave;
 qloadBtn.onclick = quickLoad;
+document.getElementById('testBugBtn').onclick = createBugTestScenario;
+document.getElementById('debugBtn').onclick = debugCurrentState;
 undoBtn.onclick = ()=>{
   if(!__history.length){ toast('Nothing to undo.'); return; }
   const prev = __history.pop();
