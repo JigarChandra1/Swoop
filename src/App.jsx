@@ -1484,6 +1484,14 @@ export default function App(){
       const L=LANES[pc.r].L;
       const cps=checkpoints(L);
 
+      // If the piece is on a Deterrent at end of turn, it is removed (do this before any sliding)
+      const onDetNow = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
+      if(onDetNow){
+        if(pc.carrying && LANES[pc.r].basket){ newGame.baskets[pc.r]=true; }
+        // Skip adding to kept — piece removed due to deterrent
+        continue;
+      }
+
       // Pick up basket at end if available
       if(pc.step===L && LANES[pc.r].basket && newGame.baskets[pc.r] && !pc.carrying){
         pc.carrying=true;
