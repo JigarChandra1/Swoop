@@ -114,6 +114,9 @@ function initialGame(){
     current:0,
     rolled:null,
     selectedPair:null,
+    // For Can't Stop style: list of sums left to advance this roll
+    pendingAdvances:null,
+    rollMovesDone:0,
     mode:'preroll',
     baskets: LANES.map(l=>l.basket),
     message:'Monkeys, roll the dice!',
@@ -133,6 +136,46 @@ export default function App(){
   const [showLoadModal, setShowLoadModal] = React.useState(false);
   const [loadText, setLoadText] = React.useState('');
 
+  // Undo history (stack of prior snapshots) and bookkeeping
+  const historyRef = React.useRef([]); // array of snapshot objects from getState()
+  const prevSnapshotRef = React.useRef(null); // JSON string of previous snapshot
+  const isUndoingRef = React.useRef(false);
+
+  // Auto Quick-Save + History capture: persist on any state change and push previous snapshot to history
+  React.useEffect(() => {
+    const currJson = JSON.stringify(getState());
+
+    if (prevSnapshotRef.current === null) {
+      // First render: set previous snapshot baseline
+      prevSnapshotRef.current = currJson;
+    } else {
+      if (!isUndoingRef.current) {
+        try {
+          const prevObj = JSON.parse(prevSnapshotRef.current);
+          historyRef.current.push(prevObj);
+          if (historyRef.current.length > 100) historyRef.current.shift(); // cap history
+        } catch (e) { /* ignore */ }
+      } else {
+        // Completed an undo action; clear flag
+        isUndoingRef.current = false;
+      }
+      prevSnapshotRef.current = currJson;
+    }
+
+    try { localStorage.setItem('SWOOP_STATE_V60', currJson); } catch (e) {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game]);
+
+  function undo(){
+    const hist = historyRef.current;
+    if (!hist || hist.length === 0) { showToast('Nothing to undo.'); return; }
+    const prev = hist.pop();
+    // Prevent pushing to history during this state restore
+    isUndoingRef.current = true;
+    setState(prev, { silent: true });
+    showToast('Undid last action.');
+  }
+
   function showToast(message) {
     setToast(message);
     setTimeout(() => setToast(null), 1500);
@@ -141,9 +184,19 @@ export default function App(){
   function existsAnyMoveThisRoll(){
     if(!game.rolled) return false;
     const pl=game.players[game.current];
-    // Check if any of the available pairs can be used for a move
-    for(const pr of game.rolled.pairs){
-      if(canMoveOnSum(pl, pr.sum)) return true;
+    // New: evaluate pairings — any pairing that enables at least one move?
+    if (game.rolled.pairings && Array.isArray(game.rolled.pairings)) {
+      for (const pairing of game.rolled.pairings) {
+        const [a,b] = pairing;
+        const canA = canMoveOnSum(pl, a.sum);
+        const canB = canMoveOnSum(pl, b.sum);
+        if (canA || canB) return true;
+      }
+      return false;
+    }
+    // Backward-compat if older state still has pairs
+    if (game.rolled.pairs && Array.isArray(game.rolled.pairs)) {
+      for(const pr of game.rolled.pairs){ if(canMoveOnSum(pl, pr.sum)) return true; }
     }
     return false;
   }
@@ -156,16 +209,36 @@ export default function App(){
   }
 
   function anyMandatoryActionThisRoll(){
-    return existsAnyMoveThisRoll();
+    // In Can't Stop style, you must advance if a move is available in the current roll context
+    if (game.mode === 'rolled' || game.mode === 'pairChosen') {
+      // If a pairing is already selected and we have pending advances, the next playable advance is mandatory
+      if (game.pendingAdvances && game.pendingAdvances.length > 0) {
+        const pl=game.players[game.current];
+        const nextSum = game.pendingAdvances[0];
+        return canMoveOnSum(pl, nextSum);
+      }
+      // Otherwise, before choosing a pairing, if any pairing yields a playable move, action is mandatory
+      return existsAnyMoveThisRoll();
+    }
+    return false;
   }
 
   function anyActionThisRoll(){
-    // For rolled mode (no pair selected yet), check if any pair can move
+    // Any action includes advancing via a valid pairing or spending a Swoop token
+    // NOTE: Used for UI hints only. During an active roll, banking is not allowed;
+    // if no legal moves exist, the only outcome is Bust (even if a token Swoop is possible).
     if(game.mode === 'rolled') {
-      return existsAnyMoveThisRoll();
+      return existsAnyMoveThisRoll() || canSwoopNow();
     }
-    // For pairChosen mode, check if the selected pair can move or swoop
-    return existsAnyMoveThisRoll() || canSwoopNow();
+    if(game.mode === 'pairChosen'){
+      const pl=game.players[game.current];
+      if (game.pendingAdvances && game.pendingAdvances.length>0) {
+        const nextSum = game.pendingAdvances[0];
+        return canMoveOnSum(pl, nextSum) || canSwoopNow();
+      }
+      return canSwoopNow();
+    }
+    return false;
   }
 
   // Transfer functionality
@@ -257,7 +330,7 @@ export default function App(){
         newGame.message = `${pl.name}: Roll or Bank.`;
       }
     } else if(previousMode === 'rolled'){
-      newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+      newGame.message = `${pl.name}: Choose a pair to move or Bust.`;
     } else if(previousMode === 'pairChosen'){
       const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
       const canSwoop = canSwoopNow();
@@ -287,7 +360,7 @@ export default function App(){
         newGame.message = `${pl.name}: Roll or Bank.`;
       }
     } else if(previousMode === 'rolled'){
-      newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+      newGame.message = `${pl.name}: Choose a pair to move or Bust.`;
     } else if(previousMode === 'pairChosen'){
       const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
       const canSwoop = canSwoopNow();
@@ -314,46 +387,244 @@ export default function App(){
 
   function roll(){
     if(game.mode!=='preroll') return;
-    const d=[r6(),r6(),r6()];
-    const pairs=[[0,1],[0,2],[1,2]].map(([i,j])=>({i,j,sum:d[i]+d[j]}));
-    const newGame = {...game, rolled:{d,pairs}, selectedPair:null, mode:'rolled'};
+    const d=[r6(),r6(),r6(),r6()];
+    // Build the 3 pairings of 4 dice: (0+1,2+3), (0+2,1+3), (0+3,1+2)
+    const pairings = [
+      [ {i:0,j:1,sum:d[0]+d[1]}, {i:2,j:3,sum:d[2]+d[3]} ],
+      [ {i:0,j:2,sum:d[0]+d[2]}, {i:1,j:3,sum:d[1]+d[3]} ],
+      [ {i:0,j:3,sum:d[0]+d[3]}, {i:1,j:2,sum:d[1]+d[2]} ],
+    ];
+    const newGame = {
+      ...game,
+      rolled:{d, pairings},
+      selectedPair:null,
+      pendingAdvances:null,
+      rollMovesDone:0,
+      mode:'rolled'
+    };
 
-    // Check if any pair can be used for movement
+    // Check if any pairing can be used for movement
     const pl = game.players[game.current];
     let hasAnyMove = false;
-    for(const pr of pairs) {
-      if(canMoveOnSum(pl, pr.sum)) {
-        hasAnyMove = true;
-        break;
-      }
+    for(const pairing of pairings) {
+      const [a,b] = pairing;
+      if (canMoveOnSum(pl, a.sum) || canMoveOnSum(pl, b.sum)) { hasAnyMove = true; break; }
     }
 
     if(!hasAnyMove){
-      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — select a pair to Move, or spend a Swoop token, or End Turn (Busted).`;
+      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — no legal pairings. Spend a Swoop token or End Turn (Busted).`;
     } else {
-      newGame.message = `${game.players[game.current].name}: select a pair to Move, or spend a Swoop token.`;
+      newGame.message = `${game.players[game.current].name}: choose a pairing (advance both if possible).`;
     }
 
     setGame(newGame);
   }
 
-  function selectPair(i){
-    // Allow pair selection from rolled, pairChosen, or swoop modes (to deselect swoop)
+  // Assess whether a lane can be advanced on this roll and what activation cost it requires (0 if moving an active piece, 1 if it would need to activate/spawn one first)
+  function moveCostForSum(pl, sum){
+    const r = LANES.findIndex(x => x.sum === sum);
+    if(r < 0) return { can:false, cost:Infinity };
+
+    const piecesOnRoute = pl.pieces.filter(p => p.r === r);
+
+    // Try active pieces first
+    const activePieces = piecesOnRoute.filter(p => p.active);
+    for(const pc of activePieces){
+      const L = LANES[pc.r].L;
+      if(pc.step === L){
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0) return { can:true, cost:0 };
+        if(canTopStepActivate(pl, pc)) return { can:true, cost:0 };
+      } else {
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0) return { can:true, cost:0 };
+      }
+    }
+
+    // Then inactive pieces (requires activation)
+    if(activeCount(pl) < 2){
+      const inactivePieces = piecesOnRoute.filter(p => !p.active);
+      for(const pc of inactivePieces){
+        const L = LANES[pc.r].L;
+        if(pc.step === L){
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return { can:true, cost:1 };
+          if(canTopStepActivate(pl, pc)) return { can:true, cost:1 };
+        } else {
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return { can:true, cost:1 };
+        }
+      }
+    }
+
+    // No pieces on route — consider spawning
+    if(pl.pieces.length >= 5 || activeCount(pl) >= 2) return { can:false, cost:Infinity };
+    if(occupied(r,1)) return { can:false, cost:Infinity };
+    return { can:true, cost:1 };
+  }
+
+  // Build deduped roll options from current pairings, respecting the 2-active-piece cap.
+  function computeRollOptions(){
+    if(!game.rolled || !game.rolled.pairings) return [];
+    const pl = game.players[game.current];
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+
+    const seen = new Set();
+    const out = [];
+
+    function describeWhySumBlocked(sum){
+      const r = LANES.findIndex(x=>x.sum===sum);
+      if(r < 0) return 'not a valid lane';
+      const piecesOnRoute = pl.pieces.filter(p=>p.r===r);
+      if(piecesOnRoute.length === 0){
+        if(pl.pieces.length >= 5) return 'needs a new piece but you already have 5 pieces';
+        if(activeCount(pl) >= 2) return 'needs a new piece but already 2 active pieces';
+        if(occupied(r,1)) return 'step 1 is currently occupied';
+        return 'needs a new piece on that lane';
+      }
+      // Some piece exists but nothing legal
+      const activePieces = piecesOnRoute.filter(p=>p.active);
+      if(activePieces.length>0){
+        const anyTargets = activePieces.some(p=>getMoveTargets(p).length>0 || (p.step===LANES[p.r].L && canTopStepActivate(pl,p)));
+        if(!anyTargets) return 'no legal moves from current positions';
+      }
+      const inactivePieces = piecesOnRoute.filter(p=>!p.active);
+      if(inactivePieces.length>0 && activeCount(pl) >= 2) return 'requires activation but already 2 active pieces';
+      return 'blocked on that lane';
+    }
+
+    for(const pairing of game.rolled.pairings){
+      const [a,b] = pairing;
+      const ca = moveCostForSum(pl, a.sum);
+      const cb = moveCostForSum(pl, b.sum);
+
+      const bothPossible = ca.can && cb.can && (ca.cost + cb.cost) <= allowedActivations;
+      if(bothPossible){
+        const s1 = Math.min(a.sum, b.sum); const s2 = Math.max(a.sum, b.sum);
+        const key = `D:${s1}-${s2}`;
+        if(!seen.has(key)){
+          seen.add(key);
+          out.push({ type:'double', sums:[s1,s2], label:`${s1} and ${s2}`, title:`${game.rolled.d[a.i]}+${game.rolled.d[a.j]} & ${game.rolled.d[b.i]}+${game.rolled.d[b.j]}` });
+        }
+      } else {
+        // Add singles for any that are individually possible
+        let pairCapReason = null;
+        if(ca.can && cb.can && (ca.cost + cb.cost) > allowedActivations){
+          pairCapReason = `Both together need ${ca.cost + cb.cost} activations; you have ${allowedActivations} (max 2 active pieces).`;
+        }
+        if(ca.can && ca.cost <= allowedActivations){
+          const key = `S:${a.sum}`;
+          if(!seen.has(key)){
+            seen.add(key);
+            const reason = pairCapReason || (!cb.can ? `Other sum ${b.sum} blocked: ${describeWhySumBlocked(b.sum)}` : null);
+            out.push({ type:'single', sums:[a.sum], label:`only ${a.sum}`, title:`${game.rolled.d[a.i]}+${game.rolled.d[a.j]}`, reason });
+          }
+        }
+        if(cb.can && cb.cost <= allowedActivations){
+          const key = `S:${b.sum}`;
+          if(!seen.has(key)){
+            seen.add(key);
+            const reason = pairCapReason || (!ca.can ? `Other sum ${a.sum} blocked: ${describeWhySumBlocked(a.sum)}` : null);
+            out.push({ type:'single', sums:[b.sum], label:`only ${b.sum}`, title:`${game.rolled.d[b.i]}+${game.rolled.d[b.j]}`, reason });
+          }
+        }
+      }
+    }
+
+    // Stable sort by label for consistent ordering
+    out.sort((x,y) => {
+      if(x.type!==y.type) return x.type==='double' ? -1 : 1; // doubles first
+      return x.label.localeCompare(y.label);
+    });
+    return out;
+  }
+
+  // Build a user-facing label for a pairing per BGA style: "X and Y" or "only X"
+  function pairingLabel(pairing){
+    // Legacy helper (kept for backward compatibility when rendering legacy saves)
+    const [a,b] = pairing;
+    const pl = game.players[game.current];
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+    const ca = moveCostForSum(pl, a.sum);
+    const cb = moveCostForSum(pl, b.sum);
+    const bothPossible = ca.can && cb.can && (ca.cost + cb.cost) <= allowedActivations;
+    if (bothPossible) return `${a.sum} and ${b.sum}`;
+    if (ca.can && ca.cost <= allowedActivations) return `only ${a.sum}`;
+    if (cb.can && cb.cost <= allowedActivations) return `only ${b.sum}`;
+    return `no play`;
+  }
+
+  function selectPairing(i){
+    // Choose one of the 3 pairings; enforce Can't Stop advance rules
     if(game.mode!=='rolled' && game.mode!=='pairChosen' && game.mode!=='chooseSwoop' && game.mode!=='pickSwoopDest') return;
+    if(!game.rolled || !game.rolled.pairings) return;
 
-    const pair = game.rolled.pairs[i];
-    const newGame = {...game, selectedPair:pair, mode:'pairChosen'};
+    const pairing = game.rolled.pairings[i];
+    const [a,b] = pairing;
+    const pl = game.players[game.current];
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+    const ca = moveCostForSum(pl, a.sum);
+    const cb = moveCostForSum(pl, b.sum);
+    const canA = ca.can && ca.cost <= allowedActivations;
+    const canB = cb.can && cb.cost <= allowedActivations;
 
-    // Clear any swoop-related state when switching pairs
+    const pending = [];
+    if (canA && canB && (ca.cost + cb.cost) <= allowedActivations) {
+      pending.push(a.sum, b.sum);
+    } else {
+      if (canA) pending.push(a.sum);
+      if (canB) pending.push(b.sum);
+    }
+
+    if (pending.length === 0) {
+      showToast('No legal moves for that pairing.');
+      return;
+    }
+
+    const newGame = {
+      ...game,
+      selectedPair: { sum: pending[0] },
+      pendingAdvances: pending,
+      mode:'pairChosen'
+    };
+
+    // Clear any swoop-related state when switching pairings
     newGame.swoopSource = null;
     newGame.swoopTargets = null;
 
-    const canMove = canMoveOnSum(game.players[game.current], pair.sum);
-    const canSwoop = canSwoopNow();
-    if(canMove && canSwoop) newGame.message = `${game.players[game.current].name}: Move or spend a Swoop token.`;
-    else if(canMove) newGame.message = `${game.players[game.current].name}: Move.`;
-    else if(canSwoop) newGame.message = `${game.players[game.current].name}: Spend a Swoop token (optional) or End Turn (Busted).`;
-    else newGame.message = `${game.players[game.current].name}: End Turn (Busted).`;
+    if (pending.length === 2) {
+      newGame.message = `${pl.name}: Move ${pending[0]} then ${pending[1]}.`;
+    } else {
+      newGame.message = `${pl.name}: Only ${pending[0]} is possible — Move.`;
+    }
+
+    setGame(newGame);
+  }
+
+  // New: selecting a deduped roll option (single or double)
+  function selectRollOption(option){
+    if(game.mode!=='rolled' && game.mode!=='pairChosen') return;
+    if(!game.rolled) return;
+
+    const sums = option.sums || [];
+    if(sums.length === 0) return;
+
+    const newGame = {
+      ...game,
+      selectedPair: { sum: sums[0] },
+      pendingAdvances: [...sums],
+      mode:'pairChosen'
+    };
+
+    // Clear any swoop-related state when switching choices
+    newGame.swoopSource = null;
+    newGame.swoopTargets = null;
+
+    if (sums.length === 2) newGame.message = `${game.players[game.current].name}: Move ${sums[0]} then ${sums[1]}.`;
+    else newGame.message = `${game.players[game.current].name}: Only ${sums[0]} is possible — Move.`;
 
     setGame(newGame);
   }
@@ -649,15 +920,27 @@ export default function App(){
   }
 
   // Push-chain helpers: snap‑down + basket transfer are handled in applyPushChain
-  function nearestValidStepDown(r, step){
-    let s = step;
-    while(s >= 1 && !tileExistsAt(r, s)) s--;
-    return s;
+  // Space helpers for geometric pushes
+  function tileTypeAtSpace(r, space){
+    const gs = Math.max(1, Math.min(MAX_STEP, space));
+    return TILE_MAP[r][gs-1] || 'Gap';
   }
-  function applyPushChain(origin, dest, newGame, pusher, isSwoop = false){
+  function snapDownSpace(r, space){
+    let sp = Math.max(1, Math.min(MAX_STEP, space));
+    while(sp >= 1 && tileTypeAtSpace(r, sp) === 'Gap') sp--;
+    return sp;
+  }
+  function applyPushChain(origin, dest, newGame, pusher, _isSwoop = false){
+    // Compute push vector. Same-lane uses step delta; cross-lane uses geometric space delta.
+    const originSpace = mapStepToGrid(origin.r, origin.step);
+    const destSpace   = mapStepToGrid(dest.r, dest.step);
     const dr = dest.r - origin.r;
-    const ds = isSwoop ? 0 : (dest.step - origin.step); // For swoops, don't push in step direction
-    if(dr===0 && ds===0) return;
+    const dsSteps = dest.step - origin.step;
+    const dSpace = destSpace - originSpace;
+    // If origin and destination are identical, no push vector
+    // Allow cross-lane pushes even when geometric space delta is 0 (e.g., top-step sideways),
+    // since the occupant should be displaced to the adjacent lane's matching space.
+    if (dr===0 && dsSteps===0) return;
     // find occupant at dest
     let occPi = -1, occPc = null;
     for(let pi=0; pi<newGame.players.length; pi++){
@@ -676,17 +959,27 @@ export default function App(){
       pl.pieces = pl.pieces.filter(p=>p!==occPc);
       return;
     }
-    const L2 = LANES[r2].L;
-    let s2 = dest.step + ds;
-    s2 = Math.max(1, Math.min(L2, s2));
-    s2 = nearestValidStepDown(r2, s2);
-    if(s2 < 1){
-      const pl = newGame.players[occPi];
-      pl.pieces = pl.pieces.filter(p=>p!==occPc);
-      return;
+    let s2;
+    if (dr === 0) {
+      // Same-lane push: move by step delta; no gap snap-down needed
+      const L2 = LANES[r2].L;
+      s2 = Math.max(1, Math.min(L2, dest.step + dsSteps));
+    } else {
+      // Cross-lane push: use geometric spaces and snap-down on gap
+      let targetSpace = destSpace + dSpace;
+      targetSpace = Math.max(1, Math.min(MAX_STEP, targetSpace));
+      let landedSpace = tileTypeAtSpace(r2, targetSpace) === 'Gap' ? snapDownSpace(r2, targetSpace) : targetSpace;
+      if(landedSpace < 1){
+        const pl = newGame.players[occPi];
+        pl.pieces = pl.pieces.filter(p=>p!==occPc);
+        return;
+      }
+      s2 = stepForSpace(r2, landedSpace);
     }
-    applyPushChain(dest, {r:r2, step:s2}, newGame, occPc, isSwoop);
+    applyPushChain(dest, {r:r2, step:s2}, newGame, occPc);
     occPc.r = r2; occPc.step = s2;
+    // After the pushed piece settles, it may pick up a basket at its new location
+    afterMovePickup(occPc, newGame);
   }
 
   function performMoveWithPush(pc, target, newGame, isSwoop = false){
@@ -747,11 +1040,37 @@ export default function App(){
       }
     }
 
-    newGame.rolled=null;
-    newGame.selectedPair=null;
-    newGame.mode='preroll';
-    newGame.message=`${pl.name}: Roll or Bank.`;
-    setGame(newGame);
+    setGame(finishPairActionAfterMove(newGame));
+  }
+
+  function finishPairActionAfterMove(stateAfterMove){
+    const ng = {...stateAfterMove};
+    const pl = ng.players[ng.current];
+    ng.rollMovesDone = (ng.rollMovesDone || 0) + 1;
+
+    // Remove the completed advance (first in pendingAdvances)
+    if (ng.pendingAdvances && ng.pendingAdvances.length > 0) {
+      const done = ng.pendingAdvances.shift();
+      // Proceed to next forced advance if it is still possible; otherwise end the roll
+      if (ng.pendingAdvances.length > 0) {
+        const nextSum = ng.pendingAdvances[0];
+        if (canMoveOnSum(pl, nextSum)) {
+          ng.selectedPair = { sum: nextSum };
+          ng.mode = 'pairChosen';
+          ng.message = `${pl.name}: Forced second move with ${nextSum}.`;
+          return ng;
+        }
+      }
+    }
+
+    // End the roll
+    ng.rolled = null;
+    ng.selectedPair = null;
+    ng.pendingAdvances = null;
+    ng.mode = 'preroll';
+    ng.rollMovesDone = 0;
+    ng.message = `${pl.name}: Roll or Bank.`;
+    return ng;
   }
 
   function chooseTopStepSwoopTarget(target){
@@ -773,6 +1092,7 @@ export default function App(){
 
     newGame.rolled=null;
     newGame.selectedPair=null;
+    newGame.pendingAdvances=null;
     newGame.mode='preroll';
     newGame.topStepPiece=null;
     newGame.topStepTargets=null;
@@ -835,6 +1155,7 @@ export default function App(){
     // Using a token completes the action for this roll — exit roll context
     newGame.rolled = null;
     newGame.selectedPair = null;
+    newGame.pendingAdvances = null;
     newGame.mode = 'preroll';
     newGame.message = `${pl.name}: Roll or Bank.`;
     setGame(newGame);
@@ -876,23 +1197,14 @@ export default function App(){
     const targets = getMoveTargets(pc);
     if(targets.length === 0){
       // No movement possible (maybe just activated)
-      newGame.rolled = null;
-      newGame.selectedPair = null;
-      newGame.mode = 'preroll';
-      newGame.message = `${pl.name}: Roll or Bank.`;
-      setGame(newGame);
+      setGame(finishPairActionAfterMove(newGame));
     } else if(targets.length === 1){
       // Auto-apply single move
       const target = targets[0];
       pc.r = target.r;
       pc.step = target.step;
       afterMovePickup(pc, newGame);
-
-      newGame.rolled = null;
-      newGame.selectedPair = null;
-      newGame.mode = 'preroll';
-      newGame.message = `${pl.name}: Roll or Bank.`;
-      setGame(newGame);
+      setGame(finishPairActionAfterMove(newGame));
     } else {
       // Multiple choices — let user select destination (up/down/sideways)
       newGame.mode = 'chooseMoveDest';
@@ -936,14 +1248,10 @@ export default function App(){
         const pl = newGame.players[newGame.current];
         const pc = newGame.movePiece;
         performMoveWithPush(pc, target, newGame);
-
-        newGame.rolled = null;
-        newGame.selectedPair = null;
-        newGame.mode = 'preroll';
+        // clear move selection UI state
         newGame.movePiece = null;
         newGame.moveTargets = null;
-        newGame.message = `${pl.name}: Roll or Bank.`;
-        setGame(newGame);
+        setGame(finishPairActionAfterMove(newGame));
       }
     } else if (game.mode === 'chooseTransferSource') {
       // Click on a piece carrying a basket to transfer from
@@ -1166,7 +1474,7 @@ export default function App(){
   }
 
   function bank(){
-    if(game.mode!=='preroll') return;
+    // Banking is only applied when not in the middle of a roll
     const newGame = {...game, baskets: [...game.baskets]};
     const pl=newGame.players[newGame.current];
     const kept=[];
@@ -1175,6 +1483,14 @@ export default function App(){
     for(const pc of pl.pieces){
       const L=LANES[pc.r].L;
       const cps=checkpoints(L);
+
+      // If the piece is on a Deterrent at end of turn, it is removed (do this before any sliding)
+      const onDetNow = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
+      if(onDetNow){
+        if(pc.carrying && LANES[pc.r].basket){ newGame.baskets[pc.r]=true; }
+        // Skip adding to kept — piece removed due to deterrent
+        continue;
+      }
 
       // Pick up basket at end if available
       if(pc.step===L && LANES[pc.r].basket && newGame.baskets[pc.r] && !pc.carrying){
@@ -1189,9 +1505,15 @@ export default function App(){
           kept.push(pc);
         }
       } else {
-        let dest=null;
-        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
-        if(dest!==null){ pc.step=dest; kept.push(pc); }
+        // If on Final step, stay put; otherwise slide to previous checkpoint
+        if(pc.step === L){
+          kept.push(pc);
+        } else {
+          let dest=null;
+          for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
+          if(dest!==null){ pc.step=dest; kept.push(pc); }
+          // If no checkpoint below, remove piece as before
+        }
       }
     }
 
@@ -1218,6 +1540,7 @@ export default function App(){
     newGame.mode='preroll';
     newGame.rolled=null;
     newGame.selectedPair=null;
+    newGame.pendingAdvances=null;
     newGame.message=`${newGame.players[newGame.current].name}, roll the dice!`;
     setGame(newGame);
   }
@@ -1234,7 +1557,8 @@ export default function App(){
         continue;
       }
 
-      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint'){
+      // Treat Final step as a keep position too (do not slide off Final)
+      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint' || pc.step === LANES[pc.r].L){
         kept.push(pc);
         continue;
       }
@@ -1248,10 +1572,8 @@ export default function App(){
 
       if(dest===null){
         if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
-      } else {
-        pc.step=dest;
-        kept.push(pc);
-      }
+        // No checkpoint found: piece removed (original behavior)
+      } else { pc.step=dest; kept.push(pc); }
     }
 
     pl.pieces=kept;
@@ -1271,23 +1593,21 @@ export default function App(){
     newGame.mode='preroll';
     newGame.rolled=null;
     newGame.selectedPair=null;
+    newGame.pendingAdvances=null;
     newGame.message=`${newGame.players[newGame.current].name}, roll the dice!`;
     setGame(newGame);
   }
 
   function bankOrBust(){
-    if(game.mode==='preroll') bank();
-    else if(game.mode==='rolled' || game.mode==='pairChosen') {
-      if(anyMandatoryActionThisRoll()) {
-        // Should not happen as button should be disabled, but just in case
-        return;
-      } else if(anyActionThisRoll()) {
-        // Has optional actions (swoop), but player chooses to bank
-        bank();
-      } else {
-        // No actions available, must bust
-        bust();
+    if(game.mode==='preroll') {
+      bank();
+    } else if(game.mode==='rolled' || game.mode==='pairChosen') {
+      // During an active roll: if any legal move exists, banking is disallowed (button disabled).
+      // If no legal moves exist, the turn ends in a Bust regardless of optional Swoop availability.
+      if(anyMandatoryActionThisRoll()){
+        return; // UI should have disabled this
       }
+      bust();
     }
   }
 
@@ -1298,7 +1618,7 @@ export default function App(){
   // Save/Load functionality
   function getState(){
     return {
-      version: 'v5.3',
+      version: 'v6.0',
       players: game.players.map(p=>({
         name: p.name,
         pieceIcon: p.pieceIcon,
@@ -1309,8 +1629,13 @@ export default function App(){
       })),
       current: game.current,
       mode: game.mode,
-      rolled: game.rolled ? {d:[...game.rolled.d], pairs:[...game.rolled.pairs]} : null,
+      rolled: game.rolled ? (
+        game.rolled.pairings ?
+          { d:[...game.rolled.d], pairings: game.rolled.pairings.map(pair => pair.map(pp => ({...pp}))) } :
+          { d:[...game.rolled.d], pairs: game.rolled.pairs ? [...game.rolled.pairs] : [] }
+      ) : null,
       selectedPair: game.selectedPair ? {...game.selectedPair} : null,
+      pendingAdvances: game.pendingAdvances ? [...game.pendingAdvances] : null,
       baskets: [...game.baskets],
       message: game.message,
       transferSource: game.transferSource ? {...game.transferSource} : null,
@@ -1318,9 +1643,10 @@ export default function App(){
     };
   }
 
-  function setState(state){
-    try{
-      const newGame = {
+function setState(state, options = {}){
+  const silent = !!options.silent;
+  try{
+    const newGame = {
         players: [
           {
             name: 'Monkeys',
@@ -1341,20 +1667,26 @@ export default function App(){
         ],
         current: (state.current===0 || state.current===1) ? state.current : 0,
         mode: state.mode || 'preroll',
-        rolled: state.rolled ? {d:[...state.rolled.d], pairs:[...state.rolled.pairs]} : null,
+        rolled: state.rolled ? (
+          state.rolled.pairings ?
+            { d:[...state.rolled.d], pairings: state.rolled.pairings.map(pair => pair.map(pp => ({...pp}))) } :
+            { d:[...state.rolled.d], pairs: state.rolled.pairs ? [...state.rolled.pairs] : [] }
+        ) : null,
         selectedPair: state.selectedPair || null,
+        rollMovesDone: state.rollMovesDone || 0,
+        pendingAdvances: state.pendingAdvances || null,
         baskets: state.baskets || LANES.map(l=>l.basket),
         message: state.message || `${state.players[state.current || 0].name}, roll the dice!`,
         transferSource: state.transferSource || null,
         transferTargets: state.transferTargets || null
       };
       setGame(newGame);
-      showToast('Game loaded successfully!');
+      if(!silent) showToast('Game loaded successfully!');
     }catch(e){
       console.error(e);
       showToast('Invalid save file.');
     }
-  }
+}
 
   function saveToFile(){
     const blob = new Blob([JSON.stringify(getState(), null, 2)], {type:'application/json'});
@@ -1405,12 +1737,12 @@ export default function App(){
   }
 
   function quickSave(){
-    localStorage.setItem('SWOOP_STATE_V53', JSON.stringify(getState()));
+    localStorage.setItem('SWOOP_STATE_V60', JSON.stringify(getState()));
     showToast('Saved to browser.');
   }
 
   function quickLoad(){
-    const txt = localStorage.getItem('SWOOP_STATE_V53');
+    const txt = localStorage.getItem('SWOOP_STATE_V60');
     if(!txt){
       showToast('No quick save found.');
       return;
@@ -1734,9 +2066,8 @@ export default function App(){
                 if (game.mode === 'preroll') return '🏦 Bank';
                 if (game.mode === 'rolled' || game.mode === 'pairChosen') {
                   const mandatory = anyMandatoryActionThisRoll();
-                  const any = anyActionThisRoll();
                   if (mandatory) return '❌ Must Move';
-                  if (any) return '🏦 Bank';
+                  // During a roll with no legal moves, only Bust is allowed
                   return '💥 Bust';
                 }
                 return '🏦 Bank';
@@ -1781,7 +2112,7 @@ export default function App(){
             </div>
           )}
 
-          {/* Dice and Pairs - Mobile Layout */}
+          {/* Dice and Pairings - Mobile Layout (Can't Stop style) */}
           {game.rolled && (
             <div className="mobile-dice-section">
               <div className="mobile-dice-container">
@@ -1792,15 +2123,28 @@ export default function App(){
                 ))}
               </div>
               <div className="mobile-pairs-container">
-                {game.rolled.pairs.map((p, i) => (
+                {/* New: deduped, legality-aware options; fallback to legacy when missing */}
+                {game.rolled.pairings && computeRollOptions().map((opt, i) => {
+                  const selected = !!(game.pendingAdvances && game.pendingAdvances.length>0 && game.selectedPair && opt.sums.includes(game.selectedPair.sum));
+                  return (
+                    <div
+                      key={`${opt.type}:${opt.sums.join(',')}`}
+                      onClick={() => selectRollOption(opt)}
+                      className={`mobile-pair ${selected ? 'selected' : ''}`}
+                      title={opt.title || ''}
+                    >
+                      <div className="pair-sum">{opt.label}</div>
+                      {opt.reason && (
+                        <div className="pair-reason">{opt.reason}</div>
+                      )}
+                    </div>
+                  );
+                })}
+                {!game.rolled.pairings && game.rolled.pairs && game.rolled.pairs.map((p, i) => (
                   <div
                     key={i}
-                    onClick={() => selectPair(i)}
-                    className={`mobile-pair ${
-                      game.selectedPair && game.selectedPair.i === p.i && game.selectedPair.j === p.j
-                        ? 'selected'
-                        : ''
-                    }`}
+                    onClick={() => showToast('Legacy save: roll once to continue.')}
+                    className={`mobile-pair`}
                   >
                     <div className="pair-sum">{p.sum}</div>
                     <div className="pair-calc">{game.rolled.d[p.i]}+{game.rolled.d[p.j]}</div>
@@ -1816,13 +2160,14 @@ export default function App(){
             <div className="legend-items">
               <div>🧺 Basket • 🟡 Safe • 🟥 Danger</div>
               <div>🐒🐵 Monkeys • 🕊️🦅 Seagulls</div>
-              <div>Roll 3 dice → Pick pair → Move/Swoop</div>
+              <div>Roll 4 dice → Choose a pairing → Advance both if possible</div>
             </div>
           </div>
 
           {/* Secondary Controls */}
           <div className="mobile-secondary-controls">
             <button className="mobile-button-small" onClick={newGame}>🔄 New</button>
+            <button className="mobile-button-small" onClick={undo}>↩️ Undo</button>
             <button className="mobile-button-small" onClick={saveToFile}>💾 Save</button>
             <button className="mobile-button-small" onClick={openLoadModal}>📁 Load</button>
             <button className="mobile-button-small" onClick={quickSave}>⚡ Quick Save</button>

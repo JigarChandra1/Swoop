@@ -306,6 +306,12 @@ body {
   color: var(--muted);
 }
 
+/* Subtle reason text for option explanations */
+.pair-reason {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
 /* Mobile Grid Cells */
 .mobile-cell {
   aspect-ratio: 1;

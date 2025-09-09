@@ -3,13 +3,13 @@ A 2‑player, push‑your‑luck race about Monkeys and Seagulls stealing basket
 1) Summary
 Players: 2 (Monkeys vs Seagulls)
 Goal: Deliver baskets to your shore. First to the agreed score wins (recommended 5).
-Core Loop: Roll 3d6 → pick any pair → Move. You may also spend Swoop tokens to make a sideways jump. Push your luck until you Bank, or you Bust.
+Core Loop: Roll 4d6 → choose a pair (up to two disjoint pairs per roll) → Move. You may also spend Swoop tokens to make a sideways jump. Push your luck until you Bank, or you Bust.
 2) Components
 Board showing 11 lanes labeled 2–12 converging at the center. Lanes are shared by both players.
 Baskets sit at the center tops of even lanes.
 Per player: 5 pieces (max 5 on the board at once).
 Per player: Swoop tokens (first player starts with 0; second player starts with 1).
-3 six‑sided dice.
+4 six‑sided dice.
 3) Board Anatomy
 Lanes are different lengths. Steps count from each shore toward the center (step 1 is the shore; the highest step L is just below the center).
 Shared lanes: There is only one cell per lane step for both players — only one piece can occupy a cell at a time.
@@ -41,9 +41,9 @@ Agree on a target score (default 5).
 5) Turn Structure
 On your turn:
 A) Pre‑roll — You may Bank (Stop) before rolling (details in §7), otherwise roll.
-B) Roll — Roll 3 dice.
-C) Choose any pair — The third die is ignored.
-D) Act — Spend the pair to Move (see §6.1). At any time during your turn, you may spend a Swoop token to Swoop with an active piece (see §6.2). Then you may roll again and repeat, until you Bank or Bust.
+B) Roll — Roll 4 dice.
+C) Choose pairs — Select one pair to act on now. The two unused dice form a forced second pair you may optionally act on in the same roll.
+D) Act — Spend a pair to Move (see §6.1). At any time during your turn, you may spend a Swoop token to Swoop with an active piece (see §6.2). You must take at least one Move if possible; the second pair is optional. Then you may roll again and repeat, until you Bank or Bust.
 6) Actions
 6.1 Move (pair sum → lane)
 If you have no piece on that sum’s lane this turn: start a piece at step 1 on that lane and mark it active (see §8).
@@ -63,8 +63,8 @@ Spend 1 Swoop token to choose any one of your active pieces and shift it to an a
 • Swoop tokens are not tied to the dice pair and can be used even when no Moves are available, as long as an active piece has a legal Swoop.
 7) Ending Your Turn
 Your turn ends in one of two ways.
-7.1 Bank (Stop) — only before you roll
-You lock in progress safely:
+7.1 Bank (Stop)
+You may Bank at any time on your turn (including between your first and optional second pair in a 4‑dice roll). Banking locks in progress safely:
 • Outward pieces (not carrying) slide down to the nearest checkpoint ≤ their current step on their lane. If there is no checkpoint behind them (e.g., at step 1), that piece falls off the board.
 • Returning pieces (carrying baskets) do not slide.
 • Deterrents trigger now: any piece on a deterrent is removed. If it was carrying, its basket returns to the lane’s top.
@@ -72,7 +72,7 @@ You lock in progress safely:
 • Earn 1 Swoop token. (Tokens are only gained on Bank, never on a Bust.)
 • Deactivate all your pieces; pass turn.
 7.2 Bust — after rolling, you cannot act
-You Bust if, given your roll: no pair can make a legal Move and no piece can Swoop legally (i.e., you have no usable token Swoops).
+You Bust if, given your roll: no pair can make a legal Move and no piece can Swoop legally (i.e., you have no usable token Swoops). If at least one pair can Move, you must take at least one Move this roll before you may Bank.
 On a Bust, apply Deterrents/Deliveries/Deactivate (no Bank sliding, no token gain).
 8) Active Pieces (per‑turn limit)
 You may have at most 2 active pieces (i.e., 2 lanes “in play”) during your current turn.

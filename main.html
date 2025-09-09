@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>SWOOP — Pass & Play (3 dice, choose any pair) — v5.2 (Save/Load)</title>
+<title>SWOOP — Pass & Play (4 dice, up to 2 moves) — v6.0 (Save/Load)</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -75,7 +75,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
   <div id="status" style="margin:6px 0 2px;font-size:18px;font-weight:700">Loading…</div>
 
   <div class="controls">
-    <button id="rollBtn" class="primary">Roll 3 Dice</button>
+    <button id="rollBtn" class="primary">Roll 4 Dice</button>
     <button id="useMoveBtn" disabled>Use Pair → Move</button>
     <button id="useSwoopBtn" disabled>Use Swoop Token</button>
     <button id="transferBtn" disabled>🔄 Transfer</button>
@@ -83,10 +83,13 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <button id="bankBtn" disabled>Bank (Stop)</button>
     <span style="flex:1"></span>
     <button id="newBtn" class="ghost">New Game</button>
+    <button id="undoBtn" class="ghost">Undo</button>
     <button id="saveBtn" class="ghost">Save</button>
     <button id="loadBtn" class="ghost">Load</button>
     <button id="qsaveBtn" class="ghost">Quick Save</button>
     <button id="qloadBtn" class="ghost">Quick Load</button>
+    <button id="testBugBtn" class="ghost" style="background: #ff6b6b; color: white;">Test Bug</button>
+    <button id="debugBtn" class="ghost" style="background: #4ecdc4; color: white;">Debug</button>
   </div>
 
   <div class="dice" id="diceRow"></div>
@@ -96,8 +99,8 @@ button:disabled{opacity:.45;cursor:not-allowed}
     <div class="grid" id="grid"></div>
     <div class="note">
       <strong>Legend:</strong> 🧺 Basket (even sums only); 🟡 Checkpoint; 🟥 Deterrent; 🐒/🐵 Monkeys; 🕊️/🦅 Seagulls.<br/>
-      Steps count from each shore toward the center. Each roll is 3d6: select any <em>pair</em> of dice. Spend that pair to <strong>Move</strong> (+1 on the lane matching the sum; returning pieces move −1) or to <strong>Swoop</strong> (adjacent lane; at odd-lane top apply ↑/↓).<br/>
-      <em>Bank</em> is only allowed before rolling. If a roll leaves no legal pair-sum moves <em>or</em> Swoops, press <strong>End Turn (Busted)</strong>.<br/>
+      Steps count from each shore toward the center. Each roll is 4d6: select a <em>pair</em> of dice (you may take up to <strong>two</strong> disjoint pairs per roll). Spend a pair to <strong>Move</strong> (+1 on the lane matching the sum; returning pieces move −1) or spend a <strong>Swoop</strong> token (adjacent lane; at odd-lane top apply ↑/↓).<br/>
+      You must take at least one move if possible; the second move is optional. <em>Bank</em> can be chosen at any time to end your turn. If a roll leaves no legal pair-sum moves <em>or</em> Swoops, press <strong>End Turn (Busted)</strong>.<br/>
       Deterrents trigger only on Bank/Bust; checkpoints are safe. <span class="warn">Cells cannot hold more than one piece.</span> Max pieces per player: <strong>5</strong>. Max <em>active pieces this turn</em>: <strong>2</strong>.
     </div>
   </div>
@@ -110,7 +113,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
   <div class="card">
     <h3>Load Game State</h3>
     <p class="small">Paste a previously saved JSON state below, or choose a file. Loading replaces the current game.</p>
-    <textarea id="loadTextarea" placeholder='{"version":"v5.2","players":[...],...}'></textarea>
+    <textarea id="loadTextarea" placeholder='{"version":"v6.0","players":[...],...}'></textarea>
     <div class="row">
       <input type="file" id="fileInput" accept="application/json"/>
       <span style="flex:1"></span>
@@ -295,6 +298,7 @@ const players=[
 let current=0;
 let rolled=null;
 let selectedPair=null;
+let rollMovesDone=0; // number of pair-based moves taken this roll (0..2)
 let mode='preroll';
 let topStepPiece=null;
 let topStepTargets=null;
@@ -320,6 +324,7 @@ const qloadBtn=document.getElementById('qloadBtn');
 const diceRow=document.getElementById('diceRow');
 const pairRow=document.getElementById('pairRow');
 const toastEl=document.getElementById('toast');
+const undoBtn=document.getElementById('undoBtn');
 
 /* ---------- UI helpers ---------- */
 function toast(m){ toastEl.textContent=m; toastEl.style.display='block'; setTimeout(()=>toastEl.style.display='none',1500); }
@@ -402,13 +407,37 @@ function tryPickupBasket(pc){
 function canSwoopNow(){
   const pl=players[current];
   if(!(pl.swoopTokens>0)) return false;
-  for(const pc of pl.pieces){ if(pc.active && potentialSwoops(pc).length>0) return true; }
+  for(const pc of pl.pieces){
+    if(pc.active && potentialSwoops(pc).length>0) return true;
+  }
   return false;
 }
-function anyMandatoryActionThisRoll(){ return existsAnyMoveThisRoll(); }
-function anyActionThisRoll(){ return existsAnyMoveThisRoll() || canSwoopNow(); }
+function anyMandatoryActionThisRoll(){
+  // Must take at least one action if possible (dice move OR swoop); subsequent actions are optional
+  return rollMovesDone===0 && (existsAnyMoveThisRoll() || canSwoopNow());
+}
+function anyActionThisRoll(){
+  return existsAnyMoveThisRoll() || canSwoopNow();
+}
+
+// Autosave + History
+let __history = [];
+let __prevSnapshot = null;
+let __isUndoing = false;
+function autosave(){
+  try { localStorage.setItem('SWOOP_STATE_V60', JSON.stringify(getState())); } catch(e){}
+}
+function captureHistory(){
+  const curr = JSON.stringify(getState());
+  if(__prevSnapshot === null){ __prevSnapshot = curr; return; }
+  if(!__isUndoing){
+    try{ __history.push(JSON.parse(__prevSnapshot)); if(__history.length>100) __history.shift(); }catch(e){}
+  } else { __isUndoing = false; }
+  __prevSnapshot = curr;
+}
 
 function render(){
+  captureHistory();
   clearPieces(); placePieces(); renderScores();
 
   // Handle game over mode
@@ -440,8 +469,18 @@ function render(){
   if(mode==='rolled' || mode==='pairChosen'){
     const mandatory = anyMandatoryActionThisRoll();
     const any = anyActionThisRoll();
+    const hasMove = existsAnyMoveThisRoll();
+    const hasSwoop = canSwoopNow();
+
     if(mandatory) {
-      bankBtn.textContent = 'Must Move';
+      // Must take an action - could be move or swoop
+      if(hasMove && hasSwoop) {
+        bankBtn.textContent = 'Must Move or Swoop';
+      } else if(hasMove) {
+        bankBtn.textContent = 'Must Move';
+      } else if(hasSwoop) {
+        bankBtn.textContent = 'Must Swoop';
+      }
       bankBtn.disabled = true;
     } else if(any) {
       bankBtn.textContent = 'Bank (Stop)';
@@ -451,6 +490,8 @@ function render(){
       bankBtn.disabled = false;
     }
   }else{ bankBtn.textContent='Bank (Stop)'; bankBtn.disabled=!(mode==='preroll'); }
+  // Auto save after each UI render/state change
+  autosave();
 }
 
 /* ---------- Start/Next ---------- */
@@ -491,15 +532,19 @@ function renderDiceAndPairs(){
     };
   });
 }
-function roll3(){
-  const d=[r6(),r6(),r6()]; rolled={ d, pairs: [[0,1],[0,2],[1,2]].map(([i,j])=>({i,j,sum:d[i]+d[j]})) };
-  selectedPair=null; mode='rolled'; renderDiceAndPairs();
+function roll4(){
+
+  const d=[r6(),r6(),r6(),r6()];
+  const pairs=[];
+  for(let i=0;i<4;i++) for(let j=i+1;j<4;j++) pairs.push({i,j,sum:d[i]+d[j]});
+  rolled={ d, pairs };
+  selectedPair=null; rollMovesDone=0; mode='rolled'; renderDiceAndPairs();
   if(!existsAnyMoveThisRoll()){
     render();
     statusEl.textContent=`${players[current].name} rolled ${d.join(' ')} — select a pair to Move, or spend a Swoop token, or End Turn (Busted).`;
   } else {
     render();
-    statusEl.textContent=`${players[current].name}: select a pair to Move, or spend a Swoop token.`;
+    statusEl.textContent=`${players[current].name}: select a pair to Move (up to 2 this roll), or spend a Swoop token.`;
   }
 }
 function updateStatusAfterSelect(){
@@ -1072,12 +1117,7 @@ function usePairForMove(){
           cell.classList.add('highlight');
           cell.onclick = () => {
             performMoveWithPush(pc, target);
-
-            rolled=null; selectedPair=null; mode='preroll';
-            diceRow.innerHTML=''; pairRow.innerHTML='';
-            clearHighlights();
-            render();
-            statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;
+            finishPairActionAfterMove(s);
           };
         }
       }
@@ -1085,8 +1125,7 @@ function usePairForMove(){
       return;
     }
   }
-  rolled=null; selectedPair=null; mode='preroll'; diceRow.innerHTML=''; pairRow.innerHTML='';
-  render(); statusEl.textContent = `${pl.name} acted on ${s}. Roll or Bank.`;
+  finishPairActionAfterMove(s);
 }
 
 function selectPieceForMove(selectedPiece){
@@ -1125,19 +1164,12 @@ function selectPieceForMove(selectedPiece){
   const targets = getMoveTargets(pc);
   if(targets.length === 0){
     // No movement possible (maybe just activated)
-    rolled=null; selectedPair=null; mode='preroll';
-    diceRow.innerHTML=''; pairRow.innerHTML='';
-    render();
-    statusEl.textContent = `${pl.name}: Roll or Bank.`;
+    finishPairActionAfterMove(sum);
   } else if(targets.length === 1){
     // Auto-apply single move
     const target = targets[0];
     performMoveWithPush(pc, target);
-
-    rolled=null; selectedPair=null; mode='preroll';
-    diceRow.innerHTML=''; pairRow.innerHTML='';
-    render();
-    statusEl.textContent = `${pl.name}: Roll or Bank.`;
+    finishPairActionAfterMove(sum);
   } else {
     // Multiple choices — let user select destination (up/down/sideways)
     mode = 'chooseMoveDest';
@@ -1147,17 +1179,40 @@ function selectPieceForMove(selectedPiece){
         cell.classList.add('highlight');
         cell.onclick = () => {
           performMoveWithPush(pc, target);
-
-          rolled=null; selectedPair=null; mode='preroll';
-          diceRow.innerHTML=''; pairRow.innerHTML='';
-          clearHighlights();
-          render();
-          statusEl.textContent = `${pl.name} acted on ${sum}. Roll or Bank.`;
+          finishPairActionAfterMove(sum);
         };
       }
     }
     statusEl.textContent = `${pl.name}: Choose Up, Down, or Sideways.`;
   }
+}
+
+function finishPairActionAfterMove(sumUsed){
+  const pl = players[current];
+  // one pair-based move completed
+  rollMovesDone = (rollMovesDone||0) + 1;
+
+  if(rolled && Array.isArray(rolled.d) && rolled.d.length===4){
+    // If first action this roll and multiple pairs were available, compute remaining forced pair
+    if(rolled.pairs && rolled.pairs.length>1 && selectedPair){
+      const used = new Set([selectedPair.i, selectedPair.j]);
+      const rem = [0,1,2,3].filter(k=>!used.has(k));
+      const secondPair = { i: rem[0], j: rem[1], sum: rolled.d[rem[0]] + rolled.d[rem[1]] };
+      // prepare for optional second move
+      rolled.pairs = [secondPair];
+      selectedPair = secondPair;
+      mode = 'pairChosen';
+      clearHighlights();
+      renderDiceAndPairs();
+      render();
+      statusEl.textContent = `${pl.name}: Optional second move with ${secondPair.sum}, or Bank/End.`;
+      return;
+    }
+  }
+
+  // No second pair pending — end roll
+  rolled=null; selectedPair=null; mode='preroll'; diceRow.innerHTML=''; pairRow.innerHTML='';
+  render(); statusEl.textContent = `${pl.name}: Roll or Bank.`;
 }
 
 function potentialSwoops(pc){
@@ -1477,7 +1532,7 @@ function bust(){
 /* ---------- Save / Load ---------- */
 function getState(){
   return {
-    version: 'v5.2',
+    version: 'v6.0',
     players: players.map(p=>({name:p.name, score:p.score, swoopTokens: p.swoopTokens||0, pieces:p.pieces.map(x=>({...x}))})),
     current,
     mode,
@@ -1535,24 +1590,169 @@ document.getElementById('fileInput').addEventListener('change', (ev)=>{
   rd.onload = ()=> loadFromText(rd.result);
   rd.readAsText(f);
 });
-function quickSave(){ localStorage.setItem('SWOOP_STATE_V52', JSON.stringify(getState())); toast('Saved to browser.'); }
-function quickLoad(){ const txt = localStorage.getItem('SWOOP_STATE_V52'); if(!txt){ toast('No quick save found.'); return; } loadFromText(txt); }
+function quickSave(){ localStorage.setItem('SWOOP_STATE_V60', JSON.stringify(getState())); toast('Saved to browser.'); }
+function quickLoad(){ const txt = localStorage.getItem('SWOOP_STATE_V60'); if(!txt){ toast('No quick save found.'); return; } loadFromText(txt); }
+
+/* ---------- Test function for debugging ---------- */
+function createBugTestScenario(){
+  // Load the exact game state from the saved file to reproduce the bug
+  const savedState = {
+    "version": "v6.0",
+    "players": [
+      {
+        "name": "Monkeys",
+        "pieceIcon": "🐒",
+        "activeIcon": "🐵",
+        "score": 0,
+        "swoopTokens": 1,
+        "pieces": [
+          {
+            "r": 4,
+            "step": 7,
+            "carrying": true,
+            "active": false
+          }
+        ]
+      },
+      {
+        "name": "Seagulls",
+        "pieceIcon": "🕊️",
+        "activeIcon": "🦅",
+        "score": 0,
+        "swoopTokens": 2,
+        "pieces": [
+          {
+            "r": 5,
+            "step": 5,
+            "carrying": false,
+            "active": true
+          },
+          {
+            "r": 6,
+            "step": 6,
+            "carrying": false,
+            "active": false
+          },
+          {
+            "r": 7,
+            "step": 1,
+            "carrying": false,
+            "active": true
+          }
+        ]
+      }
+    ],
+    "current": 1,
+    "mode": "rolled",
+    "rolled": {
+      "d": [2, 4, 2, 1],
+      "pairs": [
+        {"i": 0, "j": 1, "sum": 6},
+        {"i": 0, "j": 2, "sum": 4},
+        {"i": 0, "j": 3, "sum": 3},
+        {"i": 1, "j": 2, "sum": 6},
+        {"i": 1, "j": 3, "sum": 5},
+        {"i": 2, "j": 3, "sum": 3}
+      ]
+    },
+    "selectedPair": null
+  };
+
+  // Load the state
+  setState(savedState);
+
+  console.log('=== LOADED BUG SCENARIO ===');
+  console.log('Current player:', players[current].name);
+  console.log('Active pieces:', players[current].pieces.filter(p => p.active));
+  console.log('Swoop tokens:', players[current].swoopTokens);
+  console.log('Roll moves done:', rollMovesDone);
+
+  const hasMove = existsAnyMoveThisRoll();
+  const hasSwoop = canSwoopNow();
+  const mandatory = anyMandatoryActionThisRoll();
+  const any = anyActionThisRoll();
+
+  console.log('existsAnyMoveThisRoll():', hasMove);
+  console.log('canSwoopNow():', hasSwoop);
+  console.log('anyMandatoryActionThisRoll():', mandatory);
+  console.log('anyActionThisRoll():', any);
+
+  console.log('=== EXPECTED BEHAVIOR ===');
+  if(mandatory) {
+    console.log('Expected: Button should be disabled and show "Must Move or Swoop" or "Must Swoop"');
+  } else if(any) {
+    console.log('Expected: Button should show "Bank (Stop)"');
+  } else {
+    console.log('Expected: Button should show "End Turn (Busted)"');
+  }
+}
+
+function debugCurrentState(){
+  console.log('=== DEBUG CURRENT STATE ===');
+  console.log('Current player:', players[current].name);
+  console.log('Mode:', mode);
+  console.log('Rolled:', rolled);
+
+  const pl = players[current];
+  console.log('Player pieces:');
+  pl.pieces.forEach((pc, i) => {
+    console.log(`  Piece ${i}: r=${pc.r} step=${pc.step} active=${pc.active} carrying=${pc.carrying}`);
+  });
+  console.log('Swoop tokens:', pl.swoopTokens);
+
+  console.log('=== FUNCTION RESULTS ===');
+  const hasMove = existsAnyMoveThisRoll();
+  const hasSwoop = canSwoopNow();
+  const hasAny = anyActionThisRoll();
+  const mandatory = anyMandatoryActionThisRoll();
+
+  console.log('existsAnyMoveThisRoll():', hasMove);
+  console.log('canSwoopNow():', hasSwoop);
+  console.log('anyActionThisRoll():', hasAny);
+  console.log('anyMandatoryActionThisRoll():', mandatory);
+
+  console.log('=== EXPECTED BEHAVIOR ===');
+  if(mandatory) {
+    console.log('Expected: "Must Move" (button disabled)');
+  } else if(hasAny) {
+    console.log('Expected: "Bank (Stop)" (button enabled)');
+  } else {
+    console.log('Expected: "End Turn (Busted)" (button enabled)');
+  }
+}
 
 /* ---------- Wire up buttons ---------- */
-rollBtn.onclick = ()=>{ if(mode!=='preroll') return; roll3(); };
+rollBtn.onclick = ()=>{ if(mode!=='preroll') return; roll4(); };
 useMoveBtn.onclick = ()=> usePairForMove();
 useSwoopBtn.onclick = ()=> usePairForSwoop();
 transferBtn.onclick = ()=> startTransfer();
 cancelTransferBtn.onclick = ()=> cancelTransfer();
 bankBtn.onclick = ()=>{
   if(mode==='preroll'){ bank(); }
-  else if((mode==='rolled' || mode==='pairChosen') && !anyActionThisRoll()){ bust(); }
+  else if(mode==='rolled' || mode==='pairChosen'){
+    if(anyActionThisRoll()){
+      // Allow banking mid-roll (stop voluntarily)
+      bank();
+    } else {
+      // No actions possible this roll — this is a bust
+      bust();
+    }
+  }
 };
 newBtn.onclick = startGame;
 saveBtn.onclick = saveToFile;
 loadBtn.onclick = openLoadModal;
 qsaveBtn.onclick = quickSave;
 qloadBtn.onclick = quickLoad;
+document.getElementById('testBugBtn').onclick = createBugTestScenario;
+document.getElementById('debugBtn').onclick = debugCurrentState;
+undoBtn.onclick = ()=>{
+  if(!__history.length){ toast('Nothing to undo.'); return; }
+  const prev = __history.pop();
+  __isUndoing = true;
+  setState(prev);
+  toast('Undid last action.');
+};
 
 /* ---------- Kickoff ---------- */
 startGame();
