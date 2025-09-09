@@ -420,15 +420,139 @@ export default function App(){
     setGame(newGame);
   }
 
+  // Assess whether a lane can be advanced on this roll and what activation cost it requires (0 if moving an active piece, 1 if it would need to activate/spawn one first)
+  function moveCostForSum(pl, sum){
+    const r = LANES.findIndex(x => x.sum === sum);
+    if(r < 0) return { can:false, cost:Infinity };
+
+    const piecesOnRoute = pl.pieces.filter(p => p.r === r);
+
+    // Try active pieces first
+    const activePieces = piecesOnRoute.filter(p => p.active);
+    for(const pc of activePieces){
+      const L = LANES[pc.r].L;
+      if(pc.step === L){
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0) return { can:true, cost:0 };
+        if(canTopStepActivate(pl, pc)) return { can:true, cost:0 };
+      } else {
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0) return { can:true, cost:0 };
+      }
+    }
+
+    // Then inactive pieces (requires activation)
+    if(activeCount(pl) < 2){
+      const inactivePieces = piecesOnRoute.filter(p => !p.active);
+      for(const pc of inactivePieces){
+        const L = LANES[pc.r].L;
+        if(pc.step === L){
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return { can:true, cost:1 };
+          if(canTopStepActivate(pl, pc)) return { can:true, cost:1 };
+        } else {
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return { can:true, cost:1 };
+        }
+      }
+    }
+
+    // No pieces on route — consider spawning
+    if(pl.pieces.length >= 5 || activeCount(pl) >= 2) return { can:false, cost:Infinity };
+    if(occupied(r,1)) return { can:false, cost:Infinity };
+    return { can:true, cost:1 };
+  }
+
+  // Build deduped roll options from current pairings, respecting the 2-active-piece cap.
+  function computeRollOptions(){
+    if(!game.rolled || !game.rolled.pairings) return [];
+    const pl = game.players[game.current];
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+
+    const seen = new Set();
+    const out = [];
+
+    function describeWhySumBlocked(sum){
+      const r = LANES.findIndex(x=>x.sum===sum);
+      if(r < 0) return 'not a valid lane';
+      const piecesOnRoute = pl.pieces.filter(p=>p.r===r);
+      if(piecesOnRoute.length === 0){
+        if(pl.pieces.length >= 5) return 'needs a new piece but you already have 5 pieces';
+        if(activeCount(pl) >= 2) return 'needs a new piece but already 2 active pieces';
+        if(occupied(r,1)) return 'step 1 is currently occupied';
+        return 'needs a new piece on that lane';
+      }
+      // Some piece exists but nothing legal
+      const activePieces = piecesOnRoute.filter(p=>p.active);
+      if(activePieces.length>0){
+        const anyTargets = activePieces.some(p=>getMoveTargets(p).length>0 || (p.step===LANES[p.r].L && canTopStepActivate(pl,p)));
+        if(!anyTargets) return 'no legal moves from current positions';
+      }
+      const inactivePieces = piecesOnRoute.filter(p=>!p.active);
+      if(inactivePieces.length>0 && activeCount(pl) >= 2) return 'requires activation but already 2 active pieces';
+      return 'blocked on that lane';
+    }
+
+    for(const pairing of game.rolled.pairings){
+      const [a,b] = pairing;
+      const ca = moveCostForSum(pl, a.sum);
+      const cb = moveCostForSum(pl, b.sum);
+
+      const bothPossible = ca.can && cb.can && (ca.cost + cb.cost) <= allowedActivations;
+      if(bothPossible){
+        const s1 = Math.min(a.sum, b.sum); const s2 = Math.max(a.sum, b.sum);
+        const key = `D:${s1}-${s2}`;
+        if(!seen.has(key)){
+          seen.add(key);
+          out.push({ type:'double', sums:[s1,s2], label:`${s1} and ${s2}`, title:`${game.rolled.d[a.i]}+${game.rolled.d[a.j]} & ${game.rolled.d[b.i]}+${game.rolled.d[b.j]}` });
+        }
+      } else {
+        // Add singles for any that are individually possible
+        let pairCapReason = null;
+        if(ca.can && cb.can && (ca.cost + cb.cost) > allowedActivations){
+          pairCapReason = `Both together need ${ca.cost + cb.cost} activations; you have ${allowedActivations} (max 2 active pieces).`;
+        }
+        if(ca.can && ca.cost <= allowedActivations){
+          const key = `S:${a.sum}`;
+          if(!seen.has(key)){
+            seen.add(key);
+            const reason = pairCapReason || (!cb.can ? `Other sum ${b.sum} blocked: ${describeWhySumBlocked(b.sum)}` : null);
+            out.push({ type:'single', sums:[a.sum], label:`only ${a.sum}`, title:`${game.rolled.d[a.i]}+${game.rolled.d[a.j]}`, reason });
+          }
+        }
+        if(cb.can && cb.cost <= allowedActivations){
+          const key = `S:${b.sum}`;
+          if(!seen.has(key)){
+            seen.add(key);
+            const reason = pairCapReason || (!ca.can ? `Other sum ${a.sum} blocked: ${describeWhySumBlocked(a.sum)}` : null);
+            out.push({ type:'single', sums:[b.sum], label:`only ${b.sum}`, title:`${game.rolled.d[b.i]}+${game.rolled.d[b.j]}`, reason });
+          }
+        }
+      }
+    }
+
+    // Stable sort by label for consistent ordering
+    out.sort((x,y) => {
+      if(x.type!==y.type) return x.type==='double' ? -1 : 1; // doubles first
+      return x.label.localeCompare(y.label);
+    });
+    return out;
+  }
+
   // Build a user-facing label for a pairing per BGA style: "X and Y" or "only X"
   function pairingLabel(pairing){
+    // Legacy helper (kept for backward compatibility when rendering legacy saves)
     const [a,b] = pairing;
     const pl = game.players[game.current];
-    const canA = canMoveOnSum(pl, a.sum);
-    const canB = canMoveOnSum(pl, b.sum);
-    if (canA && canB) return `${a.sum} and ${b.sum}`;
-    if (canA && !canB) return `only ${a.sum}`;
-    if (!canA && canB) return `only ${b.sum}`;
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+    const ca = moveCostForSum(pl, a.sum);
+    const cb = moveCostForSum(pl, b.sum);
+    const bothPossible = ca.can && cb.can && (ca.cost + cb.cost) <= allowedActivations;
+    if (bothPossible) return `${a.sum} and ${b.sum}`;
+    if (ca.can && ca.cost <= allowedActivations) return `only ${a.sum}`;
+    if (cb.can && cb.cost <= allowedActivations) return `only ${b.sum}`;
     return `no play`;
   }
 
@@ -440,12 +564,20 @@ export default function App(){
     const pairing = game.rolled.pairings[i];
     const [a,b] = pairing;
     const pl = game.players[game.current];
-    const canA = canMoveOnSum(pl, a.sum);
-    const canB = canMoveOnSum(pl, b.sum);
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+    const ca = moveCostForSum(pl, a.sum);
+    const cb = moveCostForSum(pl, b.sum);
+    const canA = ca.can && ca.cost <= allowedActivations;
+    const canB = cb.can && cb.cost <= allowedActivations;
 
     const pending = [];
-    if (canA) pending.push(a.sum);
-    if (canB) pending.push(b.sum);
+    if (canA && canB && (ca.cost + cb.cost) <= allowedActivations) {
+      pending.push(a.sum, b.sum);
+    } else {
+      if (canA) pending.push(a.sum);
+      if (canB) pending.push(b.sum);
+    }
 
     if (pending.length === 0) {
       showToast('No legal moves for that pairing.');
@@ -468,6 +600,31 @@ export default function App(){
     } else {
       newGame.message = `${pl.name}: Only ${pending[0]} is possible — Move.`;
     }
+
+    setGame(newGame);
+  }
+
+  // New: selecting a deduped roll option (single or double)
+  function selectRollOption(option){
+    if(game.mode!=='rolled' && game.mode!=='pairChosen') return;
+    if(!game.rolled) return;
+
+    const sums = option.sums || [];
+    if(sums.length === 0) return;
+
+    const newGame = {
+      ...game,
+      selectedPair: { sum: sums[0] },
+      pendingAdvances: [...sums],
+      mode:'pairChosen'
+    };
+
+    // Clear any swoop-related state when switching choices
+    newGame.swoopSource = null;
+    newGame.swoopTargets = null;
+
+    if (sums.length === 2) newGame.message = `${game.players[game.current].name}: Move ${sums[0]} then ${sums[1]}.`;
+    else newGame.message = `${game.players[game.current].name}: Only ${sums[0]} is possible — Move.`;
 
     setGame(newGame);
   }
@@ -780,7 +937,10 @@ export default function App(){
     const dr = dest.r - origin.r;
     const dsSteps = dest.step - origin.step;
     const dSpace = destSpace - originSpace;
-    if((dr===0 && dsSteps===0) || (dr!==0 && dSpace===0)) return;
+    // If origin and destination are identical, no push vector
+    // Allow cross-lane pushes even when geometric space delta is 0 (e.g., top-step sideways),
+    // since the occupant should be displaced to the adjacent lane's matching space.
+    if (dr===0 && dsSteps===0) return;
     // find occupant at dest
     let occPi = -1, occPc = null;
     for(let pi=0; pi<newGame.players.length; pi++){
@@ -818,6 +978,8 @@ export default function App(){
     }
     applyPushChain(dest, {r:r2, step:s2}, newGame, occPc);
     occPc.r = r2; occPc.step = s2;
+    // After the pushed piece settles, it may pick up a basket at its new location
+    afterMovePickup(occPc, newGame);
   }
 
   function performMoveWithPush(pc, target, newGame, isSwoop = false){
@@ -1953,20 +2115,20 @@ function setState(state, options = {}){
                 ))}
               </div>
               <div className="mobile-pairs-container">
-                {/* Prefer new pairings view; fallback to legacy pairs if present */}
-                {game.rolled.pairings && game.rolled.pairings.map((pairing, i) => {
-                  const [a,b] = pairing;
-                  const label = pairingLabel(pairing);
-                  const disabled = label === 'no play';
-                  const selected = !!(game.pendingAdvances && game.pendingAdvances.length>0 && game.selectedPair && (game.selectedPair.sum===a.sum || game.selectedPair.sum===b.sum));
+                {/* New: deduped, legality-aware options; fallback to legacy when missing */}
+                {game.rolled.pairings && computeRollOptions().map((opt, i) => {
+                  const selected = !!(game.pendingAdvances && game.pendingAdvances.length>0 && game.selectedPair && opt.sums.includes(game.selectedPair.sum));
                   return (
                     <div
-                      key={i}
-                      onClick={() => !disabled && selectPairing(i)}
-                      className={`mobile-pair ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}`}
-                      title={`${game.rolled.d[a.i]}+${game.rolled.d[a.j]} & ${game.rolled.d[b.i]}+${game.rolled.d[b.j]}`}
+                      key={`${opt.type}:${opt.sums.join(',')}`}
+                      onClick={() => selectRollOption(opt)}
+                      className={`mobile-pair ${selected ? 'selected' : ''}`}
+                      title={opt.title || ''}
                     >
-                      <div className="pair-sum">{label}</div>
+                      <div className="pair-sum">{opt.label}</div>
+                      {opt.reason && (
+                        <div className="pair-reason">{opt.reason}</div>
+                      )}
                     </div>
                   );
                 })}
