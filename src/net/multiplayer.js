@@ -53,47 +53,43 @@ export async function pushState(code, { playerId, token, baseVersion, state }) {
 
 export function subscribe(code, onSync) {
   let closed = false;
-  let stop = null;
+  let stopSSE = null;
+  let stopPoll = null;
 
   function startPolling() {
     let timer = null;
     const tick = async () => {
       if (closed) return;
       try {
-        const res = await getState(code); // no since -> full check
+        const res = await getState(code); // full check; server returns unchanged if same version
         if (!res.unchanged) onSync?.({ code: res.code, version: res.version });
       } catch (_) { /* ignore */ }
-      timer = setTimeout(tick, 1500);
+      timer = setTimeout(tick, 2000);
     };
     tick();
     return () => { if (timer) clearTimeout(timer); };
   }
 
+  // Always run a light polling loop as a safety net (handles serverless/SSE limits)
+  stopPoll = startPolling();
+
+  // Try EventSource in parallel (best-effort)
   try {
     const url = (BASE_URL ? BASE_URL : '') + `/api/rooms/${code}/stream`;
     const ev = new EventSource(url, { withCredentials: false });
-    let opened = false;
     const handler = (e) => {
       try { const data = JSON.parse(e.data); onSync?.(data); } catch (_) {}
     };
-    ev.addEventListener('open', () => { opened = true; });
     ev.addEventListener('sync', handler);
-    ev.onerror = () => {
-      // If the connection failed to open or was closed, fall back to polling
-      if (!opened || ev.readyState === 2 /* CLOSED */) {
-        try { ev.close(); } catch (_) {}
-        if (!stop) stop = startPolling();
-      }
-    };
-    stop = () => { try { ev.close(); } catch (_) {}; };
+    stopSSE = () => { try { ev.close(); } catch (_) {} };
   } catch (_) {
-    // EventSource not available — poll
-    stop = startPolling();
+    // Ignore — polling is already running
   }
 
   return () => {
     closed = true;
-    if (typeof stop === 'function') stop();
+    if (typeof stopSSE === 'function') stopSSE();
+    if (typeof stopPoll === 'function') stopPoll();
   };
 }
 

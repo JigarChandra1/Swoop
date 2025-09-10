@@ -13,6 +13,16 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 app.use(cors({ origin: CORS_ORIGIN, credentials: true }));
 app.use(express.json({ limit: '1mb' }));
 
+// Normalize Vercel function path (it often strips the /api prefix before invoking our handler)
+app.use((req, _res, next) => {
+  try {
+    if (req.url && req.url.startsWith('/rooms')) {
+      req.url = '/api' + req.url;
+    }
+  } catch (_) {}
+  next();
+});
+
 // --- Helpers ---
 function genId(bytes = 12) {
   return crypto.randomBytes(bytes).toString('base64url');

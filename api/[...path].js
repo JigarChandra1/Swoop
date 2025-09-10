@@ -1,9 +1,23 @@
-const serverless = require('serverless-http');
 const { app } = require('../server/index.js');
 
-// Export a single handler that serves all /api/* routes.
-// Note: In-memory room state is per-serverless-instance and is not guaranteed to be shared across cold starts or scales.
-// For production reliability, move to a persistent store (SQLite/Planetscale/Upstash/etc.).
+function ensureApiPrefix(req) {
+  try {
+    const url = req.url || '/';
+    if (!url.startsWith('/api/')) {
+      // Normalize double slashes
+      req.url = '/api' + (url.startsWith('/') ? url : ('/' + url));
+    }
+  } catch (_) { /* ignore */ }
+}
 
-module.exports = serverless(app);
-
+// Vercel Node function — forward to Express app. This captures all /api/* routes.
+module.exports = (req, res) => {
+  try {
+    ensureApiPrefix(req);
+    return app(req, res);
+  } catch (e) {
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: 'server_error', message: e && e.message }));
+  }
+};
