@@ -10,20 +10,25 @@
     <meta name="theme-color" content="#2563eb" />
     <title>Swoop - Mobile Game</title>
     <style>
-      /* Prevent iOS bounce scrolling and zoom */
-      html, body {
-        height: 100%;
-        overflow: hidden;
-        position: fixed;
-        width: 100%;
-        -webkit-overflow-scrolling: touch;
-        -webkit-user-select: none;
-        -webkit-touch-callout: none;
-        -webkit-tap-highlight-color: transparent;
+      /* Default: do not show the orientation hint */
+      .orientation-hint { display: none; }
+
+      /* Prevent iOS bounce scrolling and zoom — mobile only */
+      @media (hover: none) and (pointer: coarse) {
+        html, body {
+          height: 100%;
+          overflow: hidden;
+          position: fixed;
+          width: 100%;
+          -webkit-overflow-scrolling: touch;
+          -webkit-user-select: none;
+          -webkit-touch-callout: none;
+          -webkit-tap-highlight-color: transparent;
+        }
       }
 
-      /* Force landscape orientation hint */
-      @media screen and (orientation: portrait) {
+      /* Show orientation hint only on small portrait touch screens */
+      @media screen and (orientation: portrait) and (max-width: 900px) and (hover: none) and (pointer: coarse) {
         .orientation-hint {
           position: fixed;
           top: 0;
@@ -62,6 +67,24 @@
     </div>
 
     <div id="root"></div>
+    <script>
+      // Optional runtime backend URL configuration for static hosting (e.g., GitHub Pages)
+      // Usage: add ?backend=https://your-backend.example.com to the URL once
+      // It will persist in localStorage and be picked up by the app.
+      (function(){
+        try {
+          var p = new URLSearchParams(location.search);
+          var b = p.get('backend');
+          if (b) {
+            window.SW_BACKEND_URL = b;
+            try { localStorage.setItem('SW_BACKEND_URL', b); } catch(_){}
+          } else {
+            var saved = null; try { saved = localStorage.getItem('SW_BACKEND_URL'); } catch(_){}
+            if (saved) window.SW_BACKEND_URL = saved;
+          }
+        } catch(_){}
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

@@ -1,0 +1,16 @@
+Branch name: push
+
+    - Major fork: 
+        - Motivation: There is a distinct lack of baskets to aim / ways-to-win when opponent is carrying baskets on 2 lanes especially easier ones like 6,8
+        - Proposal: players traverse a single set of routes for each number as opposed to routes for each player
+            - Single piece can occupy a single spot
+            - Push
+                - In the event that a piece moves to a spot occupied by another piece (regardless of self or opponent’s piece), the occupied piece is pushed 1 step away
+                - Away is with respect to direction of the approaching piece and thus can land on:
+                    - Same lane towards the route end (i.e basket end)
+                    - Same lane towards the route start
+                    - Left or right Adjacent lane same step number
+                    - Left or right Adjacent lane adjacent step
+                - Pushes are applied in a chain starting from the advancing piece to all the pieces on the push path
+                - Pieces on the start and end step of all routes are pushed off the board if the direction is away from the board
+                    - Baskets remain on the end step in the event that the piece was carrying a basket

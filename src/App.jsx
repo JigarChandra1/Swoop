@@ -1,4 +1,5 @@
 import React from 'react';
+import { createRoom as mpCreateRoom, joinRoom as mpJoinRoom, getState as mpGetState, pushState as mpPushState, subscribe as mpSubscribe, saveCreds as mpSaveCreds, loadCreds as mpLoadCreds } from './net/multiplayer.js';
 
 const LANES = [
   {sum:2, L:3, basket:true},
@@ -13,6 +14,70 @@ const LANES = [
   {sum:11, L:4, basket:false},
   {sum:12, L:3, basket:true},
 ];
+
+// Geometric Board Layout (documentation)
+// Two layers:
+// 1) Geometry "spaces" 1..11 per lane (may include gaps) used for alignment and space‑matching on Swoops.
+// 2) Movement "steps" are only real tiles (Normal/Checkpoint/Deterrent/Start/Final). Pieces occupy steps.
+//
+// TILE_MAP encodes tile type per (lane r, space 1..11). Helpers:
+//  - mapStepToGrid(r, step) → space (1..11) for a lane‑local movement step (1..L[r])
+//  - tileTypeAt / tileExistsAt  → tile info at that mapped space
+//  - stepForSpace(r, space) → best movement step for a given space (exact if possible; nearest valid otherwise)
+// Swoops: regular token Swoops space‑match across adjacent lanes via stepForSpace.
+// Push: if a pushed piece would land on a Gap, snap down to the nearest lower valid step; if none, remove.
+const MAX_STEP = 11;
+const TILE_MAP = [
+  ['Start','Gap','Gap','Gap','Gap','Checkpoint','Gap','Gap','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Gap','Gap','Checkpoint','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Deterrent','Gap','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Gap','Deterrent','Gap','Checkpoint','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Deterrent','Gap','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Final'],
+  ['Start','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Normal','Deterrent','Gap','Checkpoint','Final'],
+  ['Start','Gap','Checkpoint','Deterrent','Gap','Checkpoint','Gap','Deterrent','Checkpoint','Gap','Final'],
+  ['Start','Gap','Checkpoint','Gap','Deterrent','Gap','Checkpoint','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Deterrent','Gap','Gap','Checkpoint','Gap','Final'],
+  ['Start','Gap','Gap','Checkpoint','Gap','Gap','Gap','Checkpoint','Gap','Gap','Final'],
+  ['Start','Gap','Gap','Gap','Gap','Checkpoint','Gap','Gap','Gap','Gap','Final']
+];
+function mapStepToGrid(r, step){
+  const L = LANES[r].L;
+  if(L<=1) return 1;
+  return 1 + Math.round((step-1)*(MAX_STEP-1)/(L-1));
+}
+function tileTypeAt(r, step){
+  const gs = Math.max(1, Math.min(MAX_STEP, mapStepToGrid(r, step)));
+  return TILE_MAP[r][gs-1] || 'Gap';
+}
+function tileExistsAt(r, step){ return tileTypeAt(r, step) !== 'Gap'; }
+
+function stepForSpace(r, space) {
+  // Find the best movement step for a given geometric space
+  // First try to find an exact match
+  const L = LANES[r].L;
+  for (let step = 1; step <= L; step++) {
+    if (mapStepToGrid(r, step) === space && tileExistsAt(r, step)) {
+      return step;
+    }
+  }
+
+  // If no exact match, find the nearest valid step
+  let bestStep = null;
+  let minDistance = Infinity;
+
+  for (let step = 1; step <= L; step++) {
+    if (tileExistsAt(r, step)) {
+      const stepSpace = mapStepToGrid(r, step);
+      const distance = Math.abs(stepSpace - space);
+      if (distance < minDistance) {
+        minDistance = distance;
+        bestStep = step;
+      }
+    }
+  }
+
+  return bestStep;
+}
 
 function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); out.push(L); return [...new Set(out)].filter(x=>x>=1&&x<=L); }
 function deterrents(L,sum){ if(L<=3) return []; const det=[3,L-2]; if((sum===6||sum===8)&&L>=5) det.push(5); const cps=checkpoints(L); return [...new Set(det)].filter(x=>x>=1&&x<=L && !cps.includes(x)); }
@@ -44,12 +109,15 @@ function colForStep(side, step, L) {
 function initialGame(){
   return {
     players:[
-      {name:'Monkeys', pieceIcon:'🐒', activeIcon:'🐵', score:0, pieces:[]},
-      {name:'Seagulls', pieceIcon:'🕊️', activeIcon:'🦅', score:0, pieces:[]}
+      {name:'Monkeys', pieceIcon:'🐒', activeIcon:'🐵', score:0, swoopTokens:0, pieces:[]},
+      {name:'Seagulls', pieceIcon:'🕊️', activeIcon:'🦅', score:0, swoopTokens:1, pieces:[]}
     ],
     current:0,
     rolled:null,
     selectedPair:null,
+    // For Can't Stop style: list of sums left to advance this roll
+    pendingAdvances:null,
+    rollMovesDone:0,
     mode:'preroll',
     baskets: LANES.map(l=>l.basket),
     message:'Monkeys, roll the dice!',
@@ -69,6 +137,221 @@ export default function App(){
   const [showLoadModal, setShowLoadModal] = React.useState(false);
   const [loadText, setLoadText] = React.useState('');
 
+  // Multiplayer state
+  const [mp, setMp] = React.useState({ connected:false, code:'', version:null, playerId:null, token:null, side:null, joining:false, error:null });
+  const [mpName, setMpName] = React.useState('');
+  const [mpCodeInput, setMpCodeInput] = React.useState('');
+  const mpApplyingRef = React.useRef(false); // avoid push on remote apply
+  const mpUnsubRef = React.useRef(null);
+  const mpPushTimerRef = React.useRef(null);
+  const mpVersionRef = React.useRef(null);
+  const mpLastSnapshotRef = React.useRef(null); // last snapshot we synced with server (string)
+  const mpPendingRemoteRef = React.useRef(null); // { state, version }
+  const gameModeRef = React.useRef('preroll');
+  React.useEffect(() => { gameModeRef.current = game.mode; }, [game.mode]);
+
+  function mpCanAct() {
+    if (!mp.connected) return true;
+    if (mp.side !== 0 && mp.side !== 1) return false; // spectator
+    const isTailwind = game.mode === 'tailwind' || game.mode === 'tailwindTopStepChoice' || game.mode === 'tailwindChooseSwoop';
+    if (isTailwind) return mp.side === (1 - game.current);
+    return mp.side === game.current;
+  }
+
+  // Undo history (stack of prior snapshots) and bookkeeping
+  const historyRef = React.useRef([]); // array of snapshot objects from getState()
+  const prevSnapshotRef = React.useRef(null); // JSON string of previous snapshot
+  const isUndoingRef = React.useRef(false);
+
+  // Auto Quick-Save + History capture: persist on any state change and push previous snapshot to history
+  React.useEffect(() => {
+    const currJson = JSON.stringify(getState());
+
+    if (prevSnapshotRef.current === null) {
+      // First render: set previous snapshot baseline
+      prevSnapshotRef.current = currJson;
+    } else {
+      if (!isUndoingRef.current) {
+        try {
+          const prevObj = JSON.parse(prevSnapshotRef.current);
+          historyRef.current.push(prevObj);
+          if (historyRef.current.length > 100) historyRef.current.shift(); // cap history
+        } catch (e) { /* ignore */ }
+      } else {
+        // Completed an undo action; clear flag
+        isUndoingRef.current = false;
+      }
+      prevSnapshotRef.current = currJson;
+    }
+
+    try { localStorage.setItem('SWOOP_STATE_V60', currJson); } catch (e) {}
+    // Multiplayer: debounce push of state when connected and not applying remote
+    if (mp.connected && mp.playerId && !mpApplyingRef.current) {
+      // Always attempt to push; server enforces turn ownership based on its pre-update state.
+      // Avoid pushing transient/choice UIs that aren't fully serializable
+      const transientModes = new Set([
+        'chooseMoveDest', 'choosePiece',
+        'chooseSwoop', 'pickSwoopDest', 'chooseTopStepSwoop',
+        'chooseTransferSource', 'chooseTransferTarget',
+        'tailwind', 'tailwindTopStepChoice', 'tailwindChooseSwoop'
+      ]);
+      if (transientModes.has(game.mode)) {
+        return; // wait for a stable state before syncing
+      }
+      // Skip if snapshot matches last synced
+      if (mpLastSnapshotRef.current && mpLastSnapshotRef.current === currJson) {
+        return;
+      }
+      if (mpPushTimerRef.current) clearTimeout(mpPushTimerRef.current);
+      mpPushTimerRef.current = setTimeout(async () => {
+        try {
+          const payload = { playerId: mp.playerId, token: mp.token, baseVersion: mp.version, state: JSON.parse(currJson) };
+          const resp = await mpPushState(mp.code, payload);
+          setMp(prev => ({ ...prev, version: resp.version }));
+          // Mark snapshot as synced
+          mpLastSnapshotRef.current = currJson;
+        } catch (err) {
+          if (err && err.status === 409) {
+            // Version conflict: fetch latest and apply silently
+            try {
+              const fresh = await mpGetState(mp.code);
+              if (!fresh.unchanged) {
+                mpApplyingRef.current = true;
+                setState(fresh.state, { silent: true });
+                setMp(prev => ({ ...prev, version: fresh.version }));
+                try { mpLastSnapshotRef.current = JSON.stringify(fresh.state); } catch(_){}
+                mpApplyingRef.current = false;
+              }
+            } catch (_) {}
+          } else if (err && (err.status === 403 || err.status === 404)) {
+            setMp(prev => ({ ...prev, error: 'Disconnected from room', connected:false }));
+            showToast('Disconnected from room.');
+          }
+        }
+      }, 250);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [game]);
+
+  // Clean up push timer on unmount
+  React.useEffect(() => () => { if (mpPushTimerRef.current) clearTimeout(mpPushTimerRef.current); }, []);
+
+  // Subscribe to room version updates via SSE
+  React.useEffect(() => {
+    if (!mp.connected || !mp.code) return;
+    if (mpUnsubRef.current) { try { mpUnsubRef.current(); } catch(_){} }
+    const unsub = mpSubscribe(mp.code, async (data) => {
+      if (!data || typeof data.version !== 'number') return;
+      // Fetch latest state if version moved forward
+      try {
+        const resp = await mpGetState(mp.code, mpVersionRef.current);
+        if (!resp.unchanged) {
+          // If we're in a transient UI, defer applying to avoid interrupting
+          const transientModes = new Set([
+            'chooseMoveDest', 'choosePiece',
+            'chooseSwoop', 'pickSwoopDest', 'chooseTopStepSwoop',
+            'chooseTransferSource', 'chooseTransferTarget',
+            'tailwind', 'tailwindTopStepChoice', 'tailwindChooseSwoop'
+          ]);
+          if (transientModes.has(gameModeRef.current)) {
+            mpPendingRemoteRef.current = { state: resp.state, version: resp.version };
+          } else {
+            mpApplyingRef.current = true;
+            setState(resp.state, { silent: true });
+            setMp(prev => ({ ...prev, version: resp.version }));
+            try { mpLastSnapshotRef.current = JSON.stringify(resp.state); } catch(_){}
+            mpApplyingRef.current = false;
+          }
+        }
+      } catch(_){}
+    });
+    mpUnsubRef.current = unsub;
+    return () => { try { unsub(); } catch(_){} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mp.connected, mp.code]);
+
+  // keep ref in sync with version
+  React.useEffect(() => { mpVersionRef.current = mp.version; }, [mp.version]);
+
+  // When leaving a transient mode, apply any deferred remote state
+  React.useEffect(() => {
+    const transientModes = new Set([
+      'chooseMoveDest', 'choosePiece',
+      'chooseSwoop', 'pickSwoopDest', 'chooseTopStepSwoop',
+      'chooseTransferSource', 'chooseTransferTarget',
+      'tailwind', 'tailwindTopStepChoice', 'tailwindChooseSwoop'
+    ]);
+    if (!transientModes.has(game.mode) && mpPendingRemoteRef.current) {
+      const pending = mpPendingRemoteRef.current;
+      mpPendingRemoteRef.current = null;
+      mpApplyingRef.current = true;
+      setState(pending.state, { silent: true });
+      setMp(prev => ({ ...prev, version: pending.version }));
+      try { mpLastSnapshotRef.current = JSON.stringify(pending.state); } catch(_){}
+      mpApplyingRef.current = false;
+    }
+  }, [game.mode]);
+
+  async function mpDoCreate() {
+    if (mp.joining) return;
+    setMp(prev => ({ ...prev, joining: true, error:null }));
+    try {
+      const created = await mpCreateRoom();
+      const code = created.code;
+      // Immediately join the room
+      const jr = await mpJoinRoom(code, { name: mpName || undefined, preferredSide: 0 });
+      mpSaveCreds(code, { playerId: jr.playerId, token: jr.token, name: jr.room?.players?.find(p=>p.id===jr.playerId)?.name, side: jr.side });
+      mpApplyingRef.current = true;
+      setState(jr.state, { silent: true });
+      try { mpLastSnapshotRef.current = JSON.stringify(jr.state); } catch(_){}
+      mpApplyingRef.current = false;
+      setMp({ connected:true, code, version: jr.version, playerId: jr.playerId, token: jr.token, side: jr.side, joining:false, error:null });
+      showToast(`Room ${code} ready!`);
+    } catch (e) {
+      console.error(e);
+      setMp(prev => ({ ...prev, joining:false, error: 'Failed to create room' }));
+      showToast('Failed to create room.');
+    }
+  }
+
+  async function mpDoJoin() {
+    const code = (mpCodeInput || '').trim();
+    if (!code) { showToast('Enter a room code'); return; }
+    if (mp.joining) return;
+    setMp(prev => ({ ...prev, joining: true, error:null }));
+    try {
+      const jr = await mpJoinRoom(code, { name: mpName || undefined });
+      mpSaveCreds(code, { playerId: jr.playerId, token: jr.token, name: jr.room?.players?.find(p=>p.id===jr.playerId)?.name, side: jr.side });
+      mpApplyingRef.current = true;
+      setState(jr.state, { silent: true });
+      try { mpLastSnapshotRef.current = JSON.stringify(jr.state); } catch(_){}
+      mpApplyingRef.current = false;
+      setMp({ connected:true, code, version: jr.version, playerId: jr.playerId, token: jr.token, side: jr.side, joining:false, error:null });
+      showToast(`Joined room ${code}`);
+    } catch (e) {
+      console.error(e);
+      setMp(prev => ({ ...prev, joining:false, error: 'Failed to join room' }));
+      showToast('Failed to join room.');
+    }
+  }
+
+  function mpDisconnect() {
+    if (mpUnsubRef.current) { try { mpUnsubRef.current(); } catch(_){} mpUnsubRef.current = null; }
+    setMp({ connected:false, code:'', version:null, playerId:null, token:null, side:null, joining:false, error:null });
+    mpLastSnapshotRef.current = null;
+    showToast('Left room (local only)');
+  }
+
+  function undo(){
+    const hist = historyRef.current;
+    if (!hist || hist.length === 0) { showToast('Nothing to undo.'); return; }
+    const prev = hist.pop();
+    // Prevent pushing to history during this state restore
+    isUndoingRef.current = true;
+    setState(prev, { silent: true });
+    showToast('Undid last action.');
+  }
+
   function showToast(message) {
     setToast(message);
     setTimeout(() => setToast(null), 1500);
@@ -77,39 +360,61 @@ export default function App(){
   function existsAnyMoveThisRoll(){
     if(!game.rolled) return false;
     const pl=game.players[game.current];
-    // Check if any of the available pairs can be used for a move
-    for(const pr of game.rolled.pairs){
-      if(canMoveOnSum(pl, pr.sum)) return true;
+    // New: evaluate pairings — any pairing that enables at least one move?
+    if (game.rolled.pairings && Array.isArray(game.rolled.pairings)) {
+      for (const pairing of game.rolled.pairings) {
+        const [a,b] = pairing;
+        const canA = canMoveOnSum(pl, a.sum);
+        const canB = canMoveOnSum(pl, b.sum);
+        if (canA || canB) return true;
+      }
+      return false;
+    }
+    // Backward-compat if older state still has pairs
+    if (game.rolled.pairs && Array.isArray(game.rolled.pairs)) {
+      for(const pr of game.rolled.pairs){ if(canMoveOnSum(pl, pr.sum)) return true; }
     }
     return false;
   }
 
-  function canSwoopThisRoll(){
-    if(!(game.mode==='pairChosen' && game.selectedPair)) return false;
+  function canSwoopNow(){
     const pl=game.players[game.current];
-    const selectedSum = game.selectedPair.sum;
-    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
-
-    // Only pieces on lanes adjacent to the selected sum can swoop
-    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
-    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
-
-    const eligiblePieces = pl.pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
-    for(const pc of eligiblePieces){ if(potentialSwoops(pc).length>0) return true; }
+    if(!(pl.swoopTokens>0)) return false;
+    for(const pc of pl.pieces){ if(pc.active && potentialSwoops(pc).length>0) return true; }
     return false;
   }
 
   function anyMandatoryActionThisRoll(){
-    return existsAnyMoveThisRoll();
+    // In Can't Stop style, you must advance if a move is available in the current roll context
+    if (game.mode === 'rolled' || game.mode === 'pairChosen') {
+      // If a pairing is already selected and we have pending advances, the next playable advance is mandatory
+      if (game.pendingAdvances && game.pendingAdvances.length > 0) {
+        const pl=game.players[game.current];
+        const nextSum = game.pendingAdvances[0];
+        return canMoveOnSum(pl, nextSum);
+      }
+      // Otherwise, before choosing a pairing, if any pairing yields a playable move, action is mandatory
+      return existsAnyMoveThisRoll();
+    }
+    return false;
   }
 
   function anyActionThisRoll(){
-    // For rolled mode (no pair selected yet), check if any pair can move
+    // Any action includes advancing via a valid pairing or spending a Swoop token
+    // NOTE: Used for UI hints only. During an active roll, banking is not allowed;
+    // if no legal moves exist, the only outcome is Bust (even if a token Swoop is possible).
     if(game.mode === 'rolled') {
-      return existsAnyMoveThisRoll();
+      return existsAnyMoveThisRoll() || canSwoopNow();
     }
-    // For pairChosen mode, check if the selected pair can move or swoop
-    return existsAnyMoveThisRoll() || canSwoopThisRoll();
+    if(game.mode === 'pairChosen'){
+      const pl=game.players[game.current];
+      if (game.pendingAdvances && game.pendingAdvances.length>0) {
+        const nextSum = game.pendingAdvances[0];
+        return canMoveOnSum(pl, nextSum) || canSwoopNow();
+      }
+      return canSwoopNow();
+    }
+    return false;
   }
 
   // Transfer functionality
@@ -201,19 +506,14 @@ export default function App(){
         newGame.message = `${pl.name}: Roll or Bank.`;
       }
     } else if(previousMode === 'rolled'){
-      newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+      newGame.message = `${pl.name}: Choose a pair to move or Bust.`;
     } else if(previousMode === 'pairChosen'){
       const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
-      const canSwoop = canSwoopThisRoll();
-      if(canMove && canSwoop) {
-        newGame.message = `${pl.name}: Move or Swoop.`;
-      } else if(canMove) {
-        newGame.message = `${pl.name}: Move.`;
-      } else if(canSwoop) {
-        newGame.message = `${pl.name}: Swoop (optional) or Bank/Bust.`;
-      } else {
-        newGame.message = `${pl.name}: End Turn (Busted).`;
-      }
+      const canSwoop = canSwoopNow();
+      if(canMove && canSwoop) newGame.message = `${pl.name}: Move or spend a Swoop token.`;
+      else if(canMove) newGame.message = `${pl.name}: Move.`;
+      else if(canSwoop) newGame.message = `${pl.name}: Spend a Swoop token (optional) or End Turn (Busted).`;
+      else newGame.message = `${pl.name}: End Turn (Busted).`;
     } else {
       // For other modes, use a generic message
       newGame.message = `${pl.name}: Continue your turn.`;
@@ -236,19 +536,14 @@ export default function App(){
         newGame.message = `${pl.name}: Roll or Bank.`;
       }
     } else if(previousMode === 'rolled'){
-      newGame.message = `${pl.name}: Choose a pair to move or Bank/Bust.`;
+      newGame.message = `${pl.name}: Choose a pair to move or Bust.`;
     } else if(previousMode === 'pairChosen'){
       const canMove = canMoveOnSum(pl, newGame.selectedPair?.sum);
-      const canSwoop = canSwoopThisRoll();
-      if(canMove && canSwoop) {
-        newGame.message = `${pl.name}: Move or Swoop.`;
-      } else if(canMove) {
-        newGame.message = `${pl.name}: Move.`;
-      } else if(canSwoop) {
-        newGame.message = `${pl.name}: Swoop (optional) or Bank/Bust.`;
-      } else {
-        newGame.message = `${pl.name}: End Turn (Busted).`;
-      }
+      const canSwoop = canSwoopNow();
+      if(canMove && canSwoop) newGame.message = `${pl.name}: Move or spend a Swoop token.`;
+      else if(canMove) newGame.message = `${pl.name}: Move.`;
+      else if(canSwoop) newGame.message = `${pl.name}: Spend a Swoop token (optional) or End Turn (Busted).`;
+      else newGame.message = `${pl.name}: End Turn (Busted).`;
     } else {
       newGame.message = `${pl.name}: Continue your turn.`;
     }
@@ -256,20 +551,10 @@ export default function App(){
     setGame(newGame);
   }
 
-  function occupied(r,side,step){
-    // For the final step (merged step), allow both sides to occupy it
-    const L = LANES[r].L;
-    if (step === L) {
-      // Check if the same side already has a piece on the final step
-      for(const pl of game.players){
-        if(pl.pieces.some(pc=>pc.r===r && pc.side===side && pc.step===step)) return true;
-      }
-      return false;
-    }
-
-    // For non-final steps, use original logic
+  function occupied(r, step){
+    // Shared-lane occupancy across both players
     for(const pl of game.players){
-      if(pl.pieces.some(pc=>pc.r===r && pc.side===side && pc.step===step)) return true;
+      if(pl.pieces.some(pc=>pc.r===r && pc.step===step)) return true;
     }
     return false;
   }
@@ -278,59 +563,244 @@ export default function App(){
 
   function roll(){
     if(game.mode!=='preroll') return;
-    const d=[r6(),r6(),r6()];
-    const pairs=[[0,1],[0,2],[1,2]].map(([i,j])=>({i,j,sum:d[i]+d[j]}));
-    const newGame = {...game, rolled:{d,pairs}, selectedPair:null, mode:'rolled'};
+    const d=[r6(),r6(),r6(),r6()];
+    // Build the 3 pairings of 4 dice: (0+1,2+3), (0+2,1+3), (0+3,1+2)
+    const pairings = [
+      [ {i:0,j:1,sum:d[0]+d[1]}, {i:2,j:3,sum:d[2]+d[3]} ],
+      [ {i:0,j:2,sum:d[0]+d[2]}, {i:1,j:3,sum:d[1]+d[3]} ],
+      [ {i:0,j:3,sum:d[0]+d[3]}, {i:1,j:2,sum:d[1]+d[2]} ],
+    ];
+    const newGame = {
+      ...game,
+      rolled:{d, pairings},
+      selectedPair:null,
+      pendingAdvances:null,
+      rollMovesDone:0,
+      mode:'rolled'
+    };
 
-    // Check if any pair can be used for movement
+    // Check if any pairing can be used for movement
     const pl = game.players[game.current];
     let hasAnyMove = false;
-    for(const pr of pairs) {
-      if(canMoveOnSum(pl, pr.sum)) {
-        hasAnyMove = true;
-        break;
-      }
+    for(const pairing of pairings) {
+      const [a,b] = pairing;
+      if (canMoveOnSum(pl, a.sum) || canMoveOnSum(pl, b.sum)) { hasAnyMove = true; break; }
     }
 
     if(!hasAnyMove){
-      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — select a pair to Swoop (optional) or End Turn (Busted).`;
+      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — no legal pairings. Spend a Swoop token or End Turn (Busted).`;
     } else {
-      newGame.message = `${game.players[game.current].name}: select a pair, then Move or Swoop.`;
+      newGame.message = `${game.players[game.current].name}: choose a pairing (advance both if possible).`;
     }
 
     setGame(newGame);
   }
 
-  function selectPair(i){
-    // Allow pair selection from rolled, pairChosen, or swoop modes (to deselect swoop)
+  // Assess whether a lane can be advanced on this roll and what activation cost it requires (0 if moving an active piece, 1 if it would need to activate/spawn one first)
+  function moveCostForSum(pl, sum){
+    const r = LANES.findIndex(x => x.sum === sum);
+    if(r < 0) return { can:false, cost:Infinity };
+
+    const piecesOnRoute = pl.pieces.filter(p => p.r === r);
+
+    // Try active pieces first
+    const activePieces = piecesOnRoute.filter(p => p.active);
+    for(const pc of activePieces){
+      const L = LANES[pc.r].L;
+      if(pc.step === L){
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0) return { can:true, cost:0 };
+        if(canTopStepActivate(pl, pc)) return { can:true, cost:0 };
+      } else {
+        const targets = getMoveTargets(pc);
+        if(targets.length > 0) return { can:true, cost:0 };
+      }
+    }
+
+    // Then inactive pieces (requires activation)
+    if(activeCount(pl) < 2){
+      const inactivePieces = piecesOnRoute.filter(p => !p.active);
+      for(const pc of inactivePieces){
+        const L = LANES[pc.r].L;
+        if(pc.step === L){
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return { can:true, cost:1 };
+          if(canTopStepActivate(pl, pc)) return { can:true, cost:1 };
+        } else {
+          const targets = getMoveTargets(pc);
+          if(targets.length > 0) return { can:true, cost:1 };
+        }
+      }
+    }
+
+    // No pieces on route — consider spawning
+    if(pl.pieces.length >= 5 || activeCount(pl) >= 2) return { can:false, cost:Infinity };
+    if(occupied(r,1)) return { can:false, cost:Infinity };
+    return { can:true, cost:1 };
+  }
+
+  // Build deduped roll options from current pairings, respecting the 2-active-piece cap.
+  function computeRollOptions(){
+    if(!game.rolled || !game.rolled.pairings) return [];
+    const pl = game.players[game.current];
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+
+    const seen = new Set();
+    const out = [];
+
+    function describeWhySumBlocked(sum){
+      const r = LANES.findIndex(x=>x.sum===sum);
+      if(r < 0) return 'not a valid lane';
+      const piecesOnRoute = pl.pieces.filter(p=>p.r===r);
+      if(piecesOnRoute.length === 0){
+        if(pl.pieces.length >= 5) return 'needs a new piece but you already have 5 pieces';
+        if(activeCount(pl) >= 2) return 'needs a new piece but already 2 active pieces';
+        if(occupied(r,1)) return 'step 1 is currently occupied';
+        return 'needs a new piece on that lane';
+      }
+      // Some piece exists but nothing legal
+      const activePieces = piecesOnRoute.filter(p=>p.active);
+      if(activePieces.length>0){
+        const anyTargets = activePieces.some(p=>getMoveTargets(p).length>0 || (p.step===LANES[p.r].L && canTopStepActivate(pl,p)));
+        if(!anyTargets) return 'no legal moves from current positions';
+      }
+      const inactivePieces = piecesOnRoute.filter(p=>!p.active);
+      if(inactivePieces.length>0 && activeCount(pl) >= 2) return 'requires activation but already 2 active pieces';
+      return 'blocked on that lane';
+    }
+
+    for(const pairing of game.rolled.pairings){
+      const [a,b] = pairing;
+      const ca = moveCostForSum(pl, a.sum);
+      const cb = moveCostForSum(pl, b.sum);
+
+      const bothPossible = ca.can && cb.can && (ca.cost + cb.cost) <= allowedActivations;
+      if(bothPossible){
+        const s1 = Math.min(a.sum, b.sum); const s2 = Math.max(a.sum, b.sum);
+        const key = `D:${s1}-${s2}`;
+        if(!seen.has(key)){
+          seen.add(key);
+          out.push({ type:'double', sums:[s1,s2], label:`${s1} and ${s2}`, title:`${game.rolled.d[a.i]}+${game.rolled.d[a.j]} & ${game.rolled.d[b.i]}+${game.rolled.d[b.j]}` });
+        }
+      } else {
+        // Add singles for any that are individually possible
+        let pairCapReason = null;
+        if(ca.can && cb.can && (ca.cost + cb.cost) > allowedActivations){
+          pairCapReason = `Both together need ${ca.cost + cb.cost} activations; you have ${allowedActivations} (max 2 active pieces).`;
+        }
+        if(ca.can && ca.cost <= allowedActivations){
+          const key = `S:${a.sum}`;
+          if(!seen.has(key)){
+            seen.add(key);
+            const reason = pairCapReason || (!cb.can ? `Other sum ${b.sum} blocked: ${describeWhySumBlocked(b.sum)}` : null);
+            out.push({ type:'single', sums:[a.sum], label:`only ${a.sum}`, title:`${game.rolled.d[a.i]}+${game.rolled.d[a.j]}`, reason });
+          }
+        }
+        if(cb.can && cb.cost <= allowedActivations){
+          const key = `S:${b.sum}`;
+          if(!seen.has(key)){
+            seen.add(key);
+            const reason = pairCapReason || (!ca.can ? `Other sum ${a.sum} blocked: ${describeWhySumBlocked(a.sum)}` : null);
+            out.push({ type:'single', sums:[b.sum], label:`only ${b.sum}`, title:`${game.rolled.d[b.i]}+${game.rolled.d[b.j]}`, reason });
+          }
+        }
+      }
+    }
+
+    // Stable sort by label for consistent ordering
+    out.sort((x,y) => {
+      if(x.type!==y.type) return x.type==='double' ? -1 : 1; // doubles first
+      return x.label.localeCompare(y.label);
+    });
+    return out;
+  }
+
+  // Build a user-facing label for a pairing per BGA style: "X and Y" or "only X"
+  function pairingLabel(pairing){
+    // Legacy helper (kept for backward compatibility when rendering legacy saves)
+    const [a,b] = pairing;
+    const pl = game.players[game.current];
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+    const ca = moveCostForSum(pl, a.sum);
+    const cb = moveCostForSum(pl, b.sum);
+    const bothPossible = ca.can && cb.can && (ca.cost + cb.cost) <= allowedActivations;
+    if (bothPossible) return `${a.sum} and ${b.sum}`;
+    if (ca.can && ca.cost <= allowedActivations) return `only ${a.sum}`;
+    if (cb.can && cb.cost <= allowedActivations) return `only ${b.sum}`;
+    return `no play`;
+  }
+
+  function selectPairing(i){
+    // Choose one of the 3 pairings; enforce Can't Stop advance rules
     if(game.mode!=='rolled' && game.mode!=='pairChosen' && game.mode!=='chooseSwoop' && game.mode!=='pickSwoopDest') return;
+    if(!game.rolled || !game.rolled.pairings) return;
 
-    const pair = game.rolled.pairs[i];
-    const newGame = {...game, selectedPair:pair, mode:'pairChosen'};
+    const pairing = game.rolled.pairings[i];
+    const [a,b] = pairing;
+    const pl = game.players[game.current];
+    const ac = activeCount(pl);
+    const allowedActivations = Math.max(0, 2 - ac);
+    const ca = moveCostForSum(pl, a.sum);
+    const cb = moveCostForSum(pl, b.sum);
+    const canA = ca.can && ca.cost <= allowedActivations;
+    const canB = cb.can && cb.cost <= allowedActivations;
 
-    // Clear any swoop-related state when switching pairs
+    const pending = [];
+    if (canA && canB && (ca.cost + cb.cost) <= allowedActivations) {
+      pending.push(a.sum, b.sum);
+    } else {
+      if (canA) pending.push(a.sum);
+      if (canB) pending.push(b.sum);
+    }
+
+    if (pending.length === 0) {
+      showToast('No legal moves for that pairing.');
+      return;
+    }
+
+    const newGame = {
+      ...game,
+      selectedPair: { sum: pending[0] },
+      pendingAdvances: pending,
+      mode:'pairChosen'
+    };
+
+    // Clear any swoop-related state when switching pairings
     newGame.swoopSource = null;
     newGame.swoopTargets = null;
 
-    const canMove = canMoveOnSum(game.players[game.current], pair.sum);
-
-    // Recalculate canSwoop with the new pair selection
-    const selectedSum = pair.sum;
-    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
-    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
-    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
-    const eligiblePieces = game.players[game.current].pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
-    const canSwoop = eligiblePieces.some(pc => potentialSwoops(pc).length > 0);
-
-    if(canMove && canSwoop) {
-      newGame.message = `${game.players[game.current].name}: Move or Swoop.`;
-    } else if(canMove) {
-      newGame.message = `${game.players[game.current].name}: Move.`;
-    } else if(canSwoop) {
-      newGame.message = `${game.players[game.current].name}: Swoop (optional) or Bank/Bust.`;
+    if (pending.length === 2) {
+      newGame.message = `${pl.name}: Move ${pending[0]} then ${pending[1]}.`;
     } else {
-      newGame.message = `${game.players[game.current].name}: End Turn (Busted).`;
+      newGame.message = `${pl.name}: Only ${pending[0]} is possible — Move.`;
     }
+
+    setGame(newGame);
+  }
+
+  // New: selecting a deduped roll option (single or double)
+  function selectRollOption(option){
+    if(game.mode!=='rolled' && game.mode!=='pairChosen') return;
+    if(!game.rolled) return;
+
+    const sums = option.sums || [];
+    if(sums.length === 0) return;
+
+    const newGame = {
+      ...game,
+      selectedPair: { sum: sums[0] },
+      pendingAdvances: [...sums],
+      mode:'pairChosen'
+    };
+
+    // Clear any swoop-related state when switching choices
+    newGame.swoopSource = null;
+    newGame.swoopTargets = null;
+
+    if (sums.length === 2) newGame.message = `${game.players[game.current].name}: Move ${sums[0]} then ${sums[1]}.`;
+    else newGame.message = `${game.players[game.current].name}: Only ${sums[0]} is possible — Move.`;
 
     setGame(newGame);
   }
@@ -382,8 +852,7 @@ export default function App(){
       return false;
     } else {
       // No pieces on route - check if we can spawn a new piece
-      const side=(pl===game.players[0])?'L':'R';
-      return (pl.pieces.length<5 && !occupied(r, side, 1) && activeCount(pl)<2);
+      return (pl.pieces.length<5 && !occupied(r, 1) && activeCount(pl)<2);
     }
   }
 
@@ -397,7 +866,7 @@ export default function App(){
     const L = LANES[pc.r].L;
     if(pc.step !== L) return false;
     const downStep = L - 1;
-    return downStep >= 1 && !occupied(pc.r, pc.side, downStep);
+    return downStep >= 1 && tileExistsAt(pc.r, downStep);
   }
 
   // Check if a piece at top step can do a free swoop
@@ -419,9 +888,7 @@ export default function App(){
       if(r2 < 0 || r2 >= LANES.length) continue;
 
       const step2 = LANES[r2].L;
-      if(!occupied(r2, pc.side, step2)){
-        targets.push({r: r2, step: step2});
-      }
+      if(tileExistsAt(r2, step2)) targets.push({r: r2, step: step2});
     }
     return targets;
   }
@@ -433,13 +900,13 @@ export default function App(){
 
     // Up
     const up = pc.step + 1;
-    if(up <= L && !occupied(pc.r, pc.side, up)){
+    if(up <= L && tileExistsAt(pc.r, up)){
       targets.push({r: pc.r, step: up});
     }
 
     // Down
     const down = pc.step - 1;
-    if(down >= 1 && !occupied(pc.r, pc.side, down)){
+    if(down >= 1 && tileExistsAt(pc.r, down)){
       targets.push({r: pc.r, step: down});
     }
 
@@ -449,9 +916,7 @@ export default function App(){
         const r2 = pc.r + dr;
         if(r2 < 0 || r2 >= LANES.length) continue;
         const step2 = LANES[r2].L;
-        if(!occupied(r2, pc.side, step2)){
-          targets.push({r: r2, step: step2});
-        }
+        if(tileExistsAt(r2, step2)) targets.push({r: r2, step: step2});
       }
     }
     return targets;
@@ -462,7 +927,6 @@ export default function App(){
 
     // Get all pieces on this route
     const piecesOnRoute = pl.pieces.filter(p => p.r === r);
-    const side=(pl===game.players[0])?'L':'R';
 
     if(piecesOnRoute.length > 0){
       // Get all viable pieces (active pieces that can move + inactive pieces that can be activated and move)
@@ -524,8 +988,8 @@ export default function App(){
 
     // No pieces on route - try to spawn a new piece
     if(pl.pieces.length>=5 || activeCount(pl)>=2) return null;
-    if(occupied(r,side,1)) return null;
-    const pc={r, side, step:1, carrying:false, active:true};
+    if(occupied(r,1)) return null;
+    const pc={r, step:1, carrying:false, active:true};
     pl.pieces.push(pc);
     return pc;
   }
@@ -626,6 +1090,81 @@ export default function App(){
     return false;
   }
 
+  function returnBasketToTop(r, newGame){
+    if(!LANES[r].basket) return;
+    newGame.baskets[r] = true;
+  }
+
+  // Push-chain helpers: snap‑down + basket transfer are handled in applyPushChain
+  // Space helpers for geometric pushes
+  function tileTypeAtSpace(r, space){
+    const gs = Math.max(1, Math.min(MAX_STEP, space));
+    return TILE_MAP[r][gs-1] || 'Gap';
+  }
+  function snapDownSpace(r, space){
+    let sp = Math.max(1, Math.min(MAX_STEP, space));
+    while(sp >= 1 && tileTypeAtSpace(r, sp) === 'Gap') sp--;
+    return sp;
+  }
+  function applyPushChain(origin, dest, newGame, pusher, _isSwoop = false){
+    // Compute push vector. Same-lane uses step delta; cross-lane uses geometric space delta.
+    const originSpace = mapStepToGrid(origin.r, origin.step);
+    const destSpace   = mapStepToGrid(dest.r, dest.step);
+    const dr = dest.r - origin.r;
+    const dsSteps = dest.step - origin.step;
+    const dSpace = destSpace - originSpace;
+    // If origin and destination are identical, no push vector
+    // Allow cross-lane pushes even when geometric space delta is 0 (e.g., top-step sideways),
+    // since the occupant should be displaced to the adjacent lane's matching space.
+    if (dr===0 && dsSteps===0) return;
+    // find occupant at dest
+    let occPi = -1, occPc = null;
+    for(let pi=0; pi<newGame.players.length; pi++){
+      const pl = newGame.players[pi];
+      const pc = pl.pieces.find(p=>p.r===dest.r && p.step===dest.step);
+      if(pc){ occPi = pi; occPc = pc; break; }
+    }
+    if(!occPc) return;
+    const r2 = dest.r + dr;
+    if(occPc.carrying && pusher && !pusher.carrying){
+      pusher.carrying = true; occPc.carrying = false;
+    }
+    if(r2 < 0 || r2 >= LANES.length){
+      // remove
+      const pl = newGame.players[occPi];
+      pl.pieces = pl.pieces.filter(p=>p!==occPc);
+      return;
+    }
+    let s2;
+    if (dr === 0) {
+      // Same-lane push: move by step delta; no gap snap-down needed
+      const L2 = LANES[r2].L;
+      s2 = Math.max(1, Math.min(L2, dest.step + dsSteps));
+    } else {
+      // Cross-lane push: use geometric spaces and snap-down on gap
+      let targetSpace = destSpace + dSpace;
+      targetSpace = Math.max(1, Math.min(MAX_STEP, targetSpace));
+      let landedSpace = tileTypeAtSpace(r2, targetSpace) === 'Gap' ? snapDownSpace(r2, targetSpace) : targetSpace;
+      if(landedSpace < 1){
+        const pl = newGame.players[occPi];
+        pl.pieces = pl.pieces.filter(p=>p!==occPc);
+        return;
+      }
+      s2 = stepForSpace(r2, landedSpace);
+    }
+    applyPushChain(dest, {r:r2, step:s2}, newGame, occPc);
+    occPc.r = r2; occPc.step = s2;
+    // After the pushed piece settles, it may pick up a basket at its new location
+    afterMovePickup(occPc, newGame);
+  }
+
+  function performMoveWithPush(pc, target, newGame, isSwoop = false){
+    const origin = {r: pc.r, step: pc.step};
+    applyPushChain(origin, target, newGame, pc, isSwoop);
+    pc.r = target.r; pc.step = target.step;
+    afterMovePickup(pc, newGame);
+  }
+
   function useMove(){
     if(!(game.mode==='pairChosen' && game.selectedPair)) return;
     const newGame = {...game};
@@ -662,9 +1201,7 @@ export default function App(){
       } else if(targets.length === 1){
         // Auto-apply single move
         const target = targets[0];
-        pc.r = target.r;
-        pc.step = target.step;
-        afterMovePickup(pc, newGame);
+        performMoveWithPush(pc, target, newGame);
       } else {
         // Multiple choices — let user select destination (up/down/sideways)
         const updatedGame = {
@@ -679,11 +1216,37 @@ export default function App(){
       }
     }
 
-    newGame.rolled=null;
-    newGame.selectedPair=null;
-    newGame.mode='preroll';
-    newGame.message=`${pl.name}: Roll or Bank.`;
-    setGame(newGame);
+    setGame(finishPairActionAfterMove(newGame));
+  }
+
+  function finishPairActionAfterMove(stateAfterMove){
+    const ng = {...stateAfterMove};
+    const pl = ng.players[ng.current];
+    ng.rollMovesDone = (ng.rollMovesDone || 0) + 1;
+
+    // Remove the completed advance (first in pendingAdvances)
+    if (ng.pendingAdvances && ng.pendingAdvances.length > 0) {
+      const done = ng.pendingAdvances.shift();
+      // Proceed to next forced advance if it is still possible; otherwise end the roll
+      if (ng.pendingAdvances.length > 0) {
+        const nextSum = ng.pendingAdvances[0];
+        if (canMoveOnSum(pl, nextSum)) {
+          ng.selectedPair = { sum: nextSum };
+          ng.mode = 'pairChosen';
+          ng.message = `${pl.name}: Forced second move with ${nextSum}.`;
+          return ng;
+        }
+      }
+    }
+
+    // End the roll
+    ng.rolled = null;
+    ng.selectedPair = null;
+    ng.pendingAdvances = null;
+    ng.mode = 'preroll';
+    ng.rollMovesDone = 0;
+    ng.message = `${pl.name}: Roll or Bank.`;
+    return ng;
   }
 
   function chooseTopStepSwoopTarget(target){
@@ -694,7 +1257,7 @@ export default function App(){
 
     // Find the piece in the current player's pieces and update it
     const pl = newGame.players[newGame.current];
-    const actualPiece = pl.pieces.find(p => p.r === pc.r && p.step === pc.step && p.side === pc.side);
+    const actualPiece = pl.pieces.find(p => p.r === pc.r && p.step === pc.step);
 
     if(actualPiece){
       actualPiece.r = target.r;
@@ -705,6 +1268,7 @@ export default function App(){
 
     newGame.rolled=null;
     newGame.selectedPair=null;
+    newGame.pendingAdvances=null;
     newGame.mode='preroll';
     newGame.topStepPiece=null;
     newGame.topStepTargets=null;
@@ -719,37 +1283,31 @@ export default function App(){
 
     for(const dr of [-1,+1]){
       const r2=r+dr; if(r2<0||r2>=LANES.length) continue;
-      let step2=pc.step;
+      let step2;
 
-      if(atOddTop){
-        // Special slope adjustment for pieces at L-1 on odd lanes
-        step2=Math.min(LANES[r2].L, Math.max(1, pc.step+oddSlope[sum]));
-      } else if(atTopStep){
+      if(atTopStep){
         // Pieces at the top step can swoop to the top step of adjacent lanes
         step2=LANES[r2].L;
+      } else {
+        // Use geometric space mapping for all other cases
+        const space = mapStepToGrid(r, pc.step);
+        step2 = stepForSpace(r2, space);
       }
 
-      step2=Math.min(LANES[r2].L, step2);
-      if(!occupied(r2, pc.side, step2)) targets.push({r:r2, step:step2});
+      if(step2 && tileExistsAt(r2, step2)) targets.push({r:r2, step:step2});
     }
     return targets;
   }
 
   function useSwoop(){
-    if(!(game.mode==='pairChosen' && game.selectedPair)) return;
     const pl=game.players[game.current];
-    const selectedSum = game.selectedPair.sum;
-    const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
-
-    // Only pieces on lanes adjacent to the selected sum can swoop
-    const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
-    const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
-
-    const eligiblePieces = pl.pieces.filter(p => p.active && adjacentSums.includes(LANES[p.r].sum));
+    if(!(pl.swoopTokens>0)) return;
+    // Any active piece eligible
+    const eligiblePieces = pl.pieces.filter(p => p.active && potentialSwoops(p).length>0);
     if(eligiblePieces.length===0) return;
-
     const newGame = {...game, mode:'chooseSwoop'};
-    newGame.message = `${pl.name}: click an active piece to Swoop.`;
+    newGame.previousMode = game.mode;
+    newGame.message = `${pl.name}: spend a token — click an active piece to Swoop.`;
     setGame(newGame);
   }
 
@@ -762,26 +1320,20 @@ export default function App(){
 
   function finalizeSwoop(pc,target){
     const newGame = {...game, baskets: [...game.baskets]};
-    pc.r=target.r; pc.step=target.step;
-
-    // Check for basket pickup after swoop
-    afterMovePickup(pc, newGame);
-
-    newGame.rolled=null;
-    newGame.selectedPair=null;
-    newGame.swoopSource=null;
-    newGame.swoopTargets=null;
-
-    // Check if tailwind has any actions available
-    if (hasTailwindActions(newGame)) {
-      newGame.mode='tailwind';
-      newGame.message=`Tailwind: ${newGame.players[1-newGame.current].name} click a piece to advance or a base to spawn.`;
-    } else {
-      // Skip tailwind if no actions available
-      newGame.mode='preroll';
-      newGame.message=`${newGame.players[newGame.current].name}: Roll or Bank.`;
-    }
-
+    // spend token
+    const pl = newGame.players[newGame.current];
+    if(pl.swoopTokens>0) pl.swoopTokens -= 1;
+    performMoveWithPush(pc, target, newGame, true); // isSwoop = true
+    // Clear swoop selection state
+    newGame.swoopSource = null;
+    newGame.swoopTargets = null;
+    newGame.previousMode = null;
+    // Using a token completes the action for this roll — exit roll context
+    newGame.rolled = null;
+    newGame.selectedPair = null;
+    newGame.pendingAdvances = null;
+    newGame.mode = 'preroll';
+    newGame.message = `${pl.name}: Roll or Bank.`;
     setGame(newGame);
   }
 
@@ -793,11 +1345,7 @@ export default function App(){
     const sum = game.selectedSum;
 
     // Find the actual piece in the player's pieces array
-    const pc = pl.pieces.find(p =>
-      p.r === selectedPiece.r &&
-      p.step === selectedPiece.step &&
-      p.side === selectedPiece.side
-    );
+    const pc = pl.pieces.find(p => p.r === selectedPiece.r && p.step === selectedPiece.step);
 
     if(!pc) return;
 
@@ -825,23 +1373,14 @@ export default function App(){
     const targets = getMoveTargets(pc);
     if(targets.length === 0){
       // No movement possible (maybe just activated)
-      newGame.rolled = null;
-      newGame.selectedPair = null;
-      newGame.mode = 'preroll';
-      newGame.message = `${pl.name}: Roll or Bank.`;
-      setGame(newGame);
+      setGame(finishPairActionAfterMove(newGame));
     } else if(targets.length === 1){
       // Auto-apply single move
       const target = targets[0];
       pc.r = target.r;
       pc.step = target.step;
       afterMovePickup(pc, newGame);
-
-      newGame.rolled = null;
-      newGame.selectedPair = null;
-      newGame.mode = 'preroll';
-      newGame.message = `${pl.name}: Roll or Bank.`;
-      setGame(newGame);
+      setGame(finishPairActionAfterMove(newGame));
     } else {
       // Multiple choices — let user select destination (up/down/sideways)
       newGame.mode = 'chooseMoveDest';
@@ -852,13 +1391,17 @@ export default function App(){
     }
   }
 
-  function handleTileClick(r, side, step, occ) {
+  function handleTileClick(r, step, occ) {
+    // Prevent board interactions when not the acting side
+    const isTailwind = game.mode === 'tailwind' || game.mode === 'tailwindTopStepChoice' || game.mode === 'tailwindChooseSwoop';
+    if (mp.connected) {
+      if (!isTailwind && mp.side !== game.current) return;
+      if (isTailwind && mp.side !== (1 - game.current)) return;
+    }
     if (game.mode === 'choosePiece') {
       // Click on a piece to select it for movement
       if (occ && occ.pi === game.current && game.pieceChoices) {
-        const selectedPiece = game.pieceChoices.find(p =>
-          p.r === r && p.step === step && p.side === side
-        );
+        const selectedPiece = game.pieceChoices.find(p => p.r === r && p.step === step);
         if (selectedPiece) {
           selectPieceForMove(selectedPiece);
         }
@@ -871,32 +1414,26 @@ export default function App(){
     } else if (game.mode === 'pickSwoopDest') {
       // Click on a destination tile for swooping
       const target = game.swoopTargets.find(t => t.r === r && t.step === step);
-      if (target && game.swoopSource && game.swoopSource.side === side) {
+      if (target && game.swoopSource) {
         finalizeSwoop(game.swoopSource, target);
       }
     } else if (game.mode === 'chooseTopStepSwoop') {
       // Click on a destination tile for top step free swooping
       const target = game.topStepTargets.find(t => t.r === r && t.step === step);
-      if (target && game.topStepPiece && game.topStepPiece.side === side) {
+      if (target && game.topStepPiece) {
         chooseTopStepSwoopTarget(target);
       }
     } else if (game.mode === 'chooseMoveDest') {
       const target = game.moveTargets && game.moveTargets.find(t => t.r === r && t.step === step);
-      if (target && game.movePiece && game.movePiece.side === side) {
+      if (target && game.movePiece) {
         const newGame = {...game, baskets: [...game.baskets]};
         const pl = newGame.players[newGame.current];
         const pc = newGame.movePiece;
-        pc.r = target.r;
-        pc.step = target.step;
-        afterMovePickup(pc, newGame);
-
-        newGame.rolled = null;
-        newGame.selectedPair = null;
-        newGame.mode = 'preroll';
+        performMoveWithPush(pc, target, newGame);
+        // clear move selection UI state
         newGame.movePiece = null;
         newGame.moveTargets = null;
-        newGame.message = `${pl.name}: Roll or Bank.`;
-        setGame(newGame);
+        setGame(finishPairActionAfterMove(newGame));
       }
     } else if (game.mode === 'chooseTransferSource') {
       // Click on a piece carrying a basket to transfer from
@@ -911,23 +1448,17 @@ export default function App(){
     } else if (game.mode === 'tailwind') {
       // Tailwind actions
       const opp = game.players[1 - game.current];
-      const oppSide = (1 - game.current === 0) ? 'L' : 'R';
-
-      if (side === oppSide) {
-        if (occ && opp.pieces.includes(occ.pc)) {
-          // Click on opponent piece to advance it
-          tailwindAdvance(occ.pc);
-        } else if (step === 1 && opp.pieces.length < 5 && !occupied(r, side, 1)) {
-          // Click on empty step 1 to spawn
-          tailwindSpawn(r);
-        }
+      if (occ && opp.pieces.includes(occ.pc)) {
+        // Click on opponent piece to advance it
+        tailwindAdvance(occ.pc);
+      } else if (step === 1 && opp.pieces.length < 5 && !occupied(r, 1)) {
+        // Click on empty step 1 to spawn
+        tailwindSpawn(r);
       }
     } else if (game.mode === 'tailwindChooseSwoop') {
       // Click on a destination tile for tailwind swoop
       const target = game.tailwindSwoopTargets && game.tailwindSwoopTargets.find(t => t.r === r && t.step === step);
-      if (target && game.tailwindPiece && game.tailwindPiece.side === side) {
-        handleTailwindSwoopChoice(target);
-      }
+      if (target && game.tailwindPiece) handleTailwindSwoopChoice(target);
     }
   }
 
@@ -968,10 +1499,9 @@ export default function App(){
         if (index > -1) opp.pieces.splice(index, 1);
       }
       // Carrying piece can't advance beyond final step (shouldn't happen)
-    } else if (ns >= 1 && !occupied(piece.r, piece.side, ns)) {
-      // Normal advancement within lane bounds
-      piece.step=ns;
-      afterMovePickup(piece, newGame);
+    } else if (ns >= 1) {
+      // Normal advancement within lane bounds (with push)
+      performMoveWithPush(piece, {r: piece.r, step: ns}, newGame);
     }
 
     finishTailwind(newGame);
@@ -980,8 +1510,7 @@ export default function App(){
   function tailwindSpawn(r){
     const newGame = {...game};
     const opp=newGame.players[1-newGame.current];
-    const side=(1-newGame.current===0)?'L':'R';
-    opp.pieces.push({r, side, step:1, carrying:false, active:false});
+    opp.pieces.push({r, step:1, carrying:false, active:false});
     finishTailwind(newGame);
   }
 
@@ -1000,9 +1529,7 @@ export default function App(){
     const opp = newGame.players[1 - newGame.current];
 
     // Find the actual piece in the opponent's pieces array
-    const actualPiece = opp.pieces.find(p =>
-      p.r === piece.r && p.step === piece.step && p.side === piece.side
-    );
+    const actualPiece = opp.pieces.find(p => p.r === piece.r && p.step === piece.step);
 
     if (!actualPiece) {
       finishTailwind(newGame);
@@ -1012,9 +1539,8 @@ export default function App(){
     if (action === 'move_down') {
       const L = LANES[actualPiece.r].L;
       const downStep = L - 1;
-      if (downStep >= 1 && !occupied(actualPiece.r, actualPiece.side, downStep)) {
-        actualPiece.step = downStep;
-        afterMovePickup(actualPiece, newGame);
+      if (downStep >= 1) {
+        performMoveWithPush(actualPiece, {r: actualPiece.r, step: downStep}, newGame);
         showToast(`Moved down to step ${downStep}`);
       }
     } else if (action === 'swoop') {
@@ -1022,9 +1548,7 @@ export default function App(){
       if (targets.length === 1) {
         // Auto-select single target
         const target = targets[0];
-        actualPiece.r = target.r;
-        actualPiece.step = target.step;
-        afterMovePickup(actualPiece, newGame);
+        performMoveWithPush(actualPiece, target, newGame);
         showToast(`Swooped to lane ${LANES[target.r].sum}!`);
       } else if (targets.length > 1) {
         // Let player choose swoop target
@@ -1052,14 +1576,10 @@ export default function App(){
     const opp = newGame.players[1 - newGame.current];
 
     // Find the actual piece in the opponent's pieces array
-    const actualPiece = opp.pieces.find(p =>
-      p.r === piece.r && p.step === piece.step && p.side === piece.side
-    );
+    const actualPiece = opp.pieces.find(p => p.r === piece.r && p.step === piece.step);
 
     if (actualPiece) {
-      actualPiece.r = target.r;
-      actualPiece.step = target.step;
-      afterMovePickup(actualPiece, newGame);
+      performMoveWithPush(actualPiece, target, newGame);
       showToast(`Swooped to lane ${LANES[target.r].sum}!`);
     }
 
@@ -1074,7 +1594,6 @@ export default function App(){
   // Check if tailwind has any available actions
   function hasTailwindActions(gameState = game) {
     const opp = gameState.players[1 - gameState.current];
-    const oppSide = (1 - gameState.current === 0) ? 'L' : 'R';
 
     // Check if any opponent pieces can advance
     for (const pc of opp.pieces) {
@@ -1091,7 +1610,7 @@ export default function App(){
       }
 
       // Normal advancement within lane bounds
-      if (ns >= 1 && !occupiedInGame(gameState, pc.r, pc.side, ns)) {
+      if (ns >= 1) {
         return true;
       }
     }
@@ -1099,7 +1618,7 @@ export default function App(){
     // Check if can spawn (if has < 5 pieces and any step 1 is free)
     if (opp.pieces.length < 5) {
       for (let r = 0; r < LANES.length; r++) {
-        if (!occupiedInGame(gameState, r, oppSide, 1)) {
+        if (!occupiedInGame(gameState, r, 1)) {
           return true;
         }
       }
@@ -1108,11 +1627,9 @@ export default function App(){
     return false;
   }
 
-  function occupiedInGame(gameState, r, side, step) {
+  function occupiedInGame(gameState, r, step) {
     for (const pl of gameState.players) {
-      if (pl.pieces.some(pc => pc.r === r && pc.side === side && pc.step === step)) {
-        return true;
-      }
+      if (pl.pieces.some(pc => pc.r === r && pc.step === step)) return true;
     }
     return false;
   }
@@ -1129,14 +1646,9 @@ export default function App(){
 
   function resolveDeterrents(pl, newGame){
     pl.pieces=pl.pieces.filter(pc=>{
-      const L=LANES[pc.r].L;
-      const sum=LANES[pc.r].sum;
-      const dets=deterrents(L,sum);
-      const onDet=dets.includes(pc.step);
+      const onDet = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
       if(onDet){
-        if(pc.carrying && LANES[pc.r].basket){
-          newGame.baskets[pc.r]=true;
-        }
+        if(pc.carrying && LANES[pc.r].basket){ newGame.baskets[pc.r]=true; }
         return false;
       }
       return true;
@@ -1144,7 +1656,7 @@ export default function App(){
   }
 
   function bank(){
-    if(game.mode!=='preroll') return;
+    // Banking is only applied when not in the middle of a roll
     const newGame = {...game, baskets: [...game.baskets]};
     const pl=newGame.players[newGame.current];
     const kept=[];
@@ -1153,6 +1665,14 @@ export default function App(){
     for(const pc of pl.pieces){
       const L=LANES[pc.r].L;
       const cps=checkpoints(L);
+
+      // If the piece is on a Deterrent at end of turn, it is removed (do this before any sliding)
+      const onDetNow = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
+      if(onDetNow){
+        if(pc.carrying && LANES[pc.r].basket){ newGame.baskets[pc.r]=true; }
+        // Skip adding to kept — piece removed due to deterrent
+        continue;
+      }
 
       // Pick up basket at end if available
       if(pc.step===L && LANES[pc.r].basket && newGame.baskets[pc.r] && !pc.carrying){
@@ -1167,13 +1687,14 @@ export default function App(){
           kept.push(pc);
         }
       } else {
-        let dest=null;
-        for(const c of cps){
-          if(c<=pc.step) dest=c;
-        }
-        if(dest!==null){
-          pc.step=dest;
+        // If on Final step, stay put; otherwise slide to previous checkpoint
+        if(pc.step === L){
           kept.push(pc);
+        } else {
+          let dest=null;
+          for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
+          if(dest!==null){ pc.step=dest; kept.push(pc); }
+          // If no checkpoint below, remove piece as before
         }
       }
     }
@@ -1184,6 +1705,8 @@ export default function App(){
       showToast(`${pl.name} delivered ${delivered}.`);
     }
     resolveDeterrents(pl, newGame);
+    // Earn a swoop token on Bank (not on Bust)
+    pl.swoopTokens = (pl.swoopTokens || 0) + 1;
     pl.pieces.forEach(p=>p.active=false);
 
     // Check for victory after delivery
@@ -1199,6 +1722,7 @@ export default function App(){
     newGame.mode='preroll';
     newGame.rolled=null;
     newGame.selectedPair=null;
+    newGame.pendingAdvances=null;
     newGame.message=`${newGame.players[newGame.current].name}, roll the dice!`;
     setGame(newGame);
   }
@@ -1209,42 +1733,29 @@ export default function App(){
     const kept=[];
 
     for(const pc of pl.pieces){
-      const L=LANES[pc.r].L;
-      const sum=LANES[pc.r].sum;
-      const cps=checkpoints(L);
-      const dets=deterrents(L,sum);
-      const onDet=dets.includes(pc.step);
-
+      const onDet = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
       if(onDet){
         if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
         continue;
       }
 
-      if(cps.includes(pc.step)){
+      // Treat Final step as a keep position too (do not slide off Final)
+      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint' || pc.step === LANES[pc.r].L){
         kept.push(pc);
         continue;
       }
 
       let dest=null;
       if(pc.carrying){
-        for(const c of cps){
-          if(c>=pc.step){
-            dest=c;
-            break;
-          }
-        }
+        for(let s=pc.step; s<=LANES[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
       } else {
-        for(const c of cps){
-          if(c<=pc.step) dest=c;
-        }
+        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
       }
 
       if(dest===null){
         if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
-      } else {
-        pc.step=dest;
-        kept.push(pc);
-      }
+        // No checkpoint found: piece removed (original behavior)
+      } else { pc.step=dest; kept.push(pc); }
     }
 
     pl.pieces=kept;
@@ -1264,23 +1775,21 @@ export default function App(){
     newGame.mode='preroll';
     newGame.rolled=null;
     newGame.selectedPair=null;
+    newGame.pendingAdvances=null;
     newGame.message=`${newGame.players[newGame.current].name}, roll the dice!`;
     setGame(newGame);
   }
 
   function bankOrBust(){
-    if(game.mode==='preroll') bank();
-    else if(game.mode==='rolled' || game.mode==='pairChosen') {
-      if(anyMandatoryActionThisRoll()) {
-        // Should not happen as button should be disabled, but just in case
-        return;
-      } else if(anyActionThisRoll()) {
-        // Has optional actions (swoop), but player chooses to bank
-        bank();
-      } else {
-        // No actions available, must bust
-        bust();
+    if(game.mode==='preroll') {
+      bank();
+    } else if(game.mode==='rolled' || game.mode==='pairChosen') {
+      // During an active roll: if any legal move exists, banking is disallowed (button disabled).
+      // If no legal moves exist, the turn ends in a Bust regardless of optional Swoop availability.
+      if(anyMandatoryActionThisRoll()){
+        return; // UI should have disabled this
       }
+      bust();
     }
   }
 
@@ -1291,18 +1800,24 @@ export default function App(){
   // Save/Load functionality
   function getState(){
     return {
-      version: 'v5.3',
+      version: 'v6.0',
       players: game.players.map(p=>({
         name: p.name,
         pieceIcon: p.pieceIcon,
         activeIcon: p.activeIcon,
         score: p.score,
+        swoopTokens: p.swoopTokens || 0,
         pieces: p.pieces.map(x=>({...x}))
       })),
       current: game.current,
       mode: game.mode,
-      rolled: game.rolled ? {d:[...game.rolled.d], pairs:[...game.rolled.pairs]} : null,
+      rolled: game.rolled ? (
+        game.rolled.pairings ?
+          { d:[...game.rolled.d], pairings: game.rolled.pairings.map(pair => pair.map(pp => ({...pp}))) } :
+          { d:[...game.rolled.d], pairs: game.rolled.pairs ? [...game.rolled.pairs] : [] }
+      ) : null,
       selectedPair: game.selectedPair ? {...game.selectedPair} : null,
+      pendingAdvances: game.pendingAdvances ? [...game.pendingAdvances] : null,
       baskets: [...game.baskets],
       message: game.message,
       transferSource: game.transferSource ? {...game.transferSource} : null,
@@ -1310,41 +1825,50 @@ export default function App(){
     };
   }
 
-  function setState(state){
-    try{
-      const newGame = {
+function setState(state, options = {}){
+  const silent = !!options.silent;
+  try{
+    const newGame = {
         players: [
           {
-            name: 'Monkeys',
+            name: state.players?.[0]?.name || 'Monkeys',
             pieceIcon: '🐒',
             activeIcon: '🐵',
             score: state.players[0].score,
+            swoopTokens: (state.players[0].swoopTokens ?? 0),
             pieces: state.players[0].pieces || []
           },
           {
-            name: 'Seagulls',
+            name: state.players?.[1]?.name || 'Seagulls',
             pieceIcon: '🕊️',
             activeIcon: '🦅',
             score: state.players[1].score,
+            swoopTokens: (state.players[1].swoopTokens ?? 0),
             pieces: state.players[1].pieces || []
           }
         ],
         current: (state.current===0 || state.current===1) ? state.current : 0,
         mode: state.mode || 'preroll',
-        rolled: state.rolled ? {d:[...state.rolled.d], pairs:[...state.rolled.pairs]} : null,
+        rolled: state.rolled ? (
+          state.rolled.pairings ?
+            { d:[...state.rolled.d], pairings: state.rolled.pairings.map(pair => pair.map(pp => ({...pp}))) } :
+            { d:[...state.rolled.d], pairs: state.rolled.pairs ? [...state.rolled.pairs] : [] }
+        ) : null,
         selectedPair: state.selectedPair || null,
+        rollMovesDone: state.rollMovesDone || 0,
+        pendingAdvances: state.pendingAdvances || null,
         baskets: state.baskets || LANES.map(l=>l.basket),
         message: state.message || `${state.players[state.current || 0].name}, roll the dice!`,
         transferSource: state.transferSource || null,
         transferTargets: state.transferTargets || null
       };
       setGame(newGame);
-      showToast('Game loaded successfully!');
+      if(!silent) showToast('Game loaded successfully!');
     }catch(e){
       console.error(e);
       showToast('Invalid save file.');
     }
-  }
+}
 
   function saveToFile(){
     const blob = new Blob([JSON.stringify(getState(), null, 2)], {type:'application/json'});
@@ -1395,12 +1919,12 @@ export default function App(){
   }
 
   function quickSave(){
-    localStorage.setItem('SWOOP_STATE_V53', JSON.stringify(getState()));
+    localStorage.setItem('SWOOP_STATE_V60', JSON.stringify(getState()));
     showToast('Saved to browser.');
   }
 
   function quickLoad(){
-    const txt = localStorage.getItem('SWOOP_STATE_V53');
+    const txt = localStorage.getItem('SWOOP_STATE_V60');
     if(!txt){
       showToast('No quick save found.');
       return;
@@ -1411,19 +1935,19 @@ export default function App(){
 
 
   /* Rendering helpers */
-  function pieceAt(r, side, step){
+  function pieceAt(r, step){
     for(let pi=0; pi<game.players.length; pi++){
       const pl=game.players[pi];
-      const pc=pl.pieces.find(p=>p.r===r && p.side===side && p.step===step);
+      const pc=pl.pieces.find(p=>p.r===r && p.step===step);
       if(pc) return {pi, pc};
     }
     return null;
   }
 
-  function getCellClasses(r, side, step) {
-    const lane = LANES[r];
-    const isCp = checkpoints(lane.L).includes(step);
-    const isDet = deterrents(lane.L, lane.sum).includes(step);
+  function getCellClasses(r, step) {
+    const tt = tileTypeAt(r, step);
+    const isCp = tt === 'Checkpoint';
+    const isDet = tt === 'Deterrent';
 
     let classes = "mobile-cell swoop-tile";
 
@@ -1434,97 +1958,78 @@ export default function App(){
     }
 
     // Add highlighting for interactive tiles
-    if (shouldHighlightTile(r, side, step)) {
+    if (shouldHighlightTile(r, step)) {
       classes += " swoop-highlight";
     }
 
     return classes;
   }
 
-  function shouldHighlightTile(r, side, step) {
+  function shouldHighlightTile(r, step) {
+    // Disable highlights for non-acting clients (prevents click affordances)
+    if (mp.connected) {
+      const isTailwind = game.mode === 'tailwind' || game.mode === 'tailwindTopStepChoice' || game.mode === 'tailwindChooseSwoop';
+      if (!isTailwind && mp.side !== game.current) return false;
+      if (isTailwind && mp.side !== (1 - game.current)) return false;
+    }
     // Highlight pieces available for selection
     if (game.mode === 'choosePiece' && game.pieceChoices) {
-      return game.pieceChoices.some(p => p.r === r && p.side === side && p.step === step);
+      return game.pieceChoices.some(p => p.r === r && p.step === step);
     }
 
-    // Highlight eligible pieces for swoop selection
-    if (game.mode === 'chooseSwoop' && game.selectedPair) {
-      const selectedSum = game.selectedPair.sum;
-      const selectedLaneIndex = LANES.findIndex(lane => lane.sum === selectedSum);
-      const adjacentLaneIndices = [selectedLaneIndex - 1, selectedLaneIndex + 1].filter(idx => idx >= 0 && idx < LANES.length);
-      const adjacentSums = adjacentLaneIndices.map(idx => LANES[idx].sum);
-
+    // Highlight eligible pieces for token Swoop selection (not tied to selected pair)
+    if (game.mode === 'chooseSwoop') {
       const pl = game.players[game.current];
-      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step && p.active);
-      return piece && adjacentSums.includes(LANES[r].sum);
+      const piece = pl.pieces.find(p => p.r === r && p.step === step && p.active);
+      return !!(piece && potentialSwoops(piece).length > 0);
     }
 
     // Highlight swoop destinations
     if (game.mode === 'pickSwoopDest' && game.swoopTargets) {
-      return game.swoopTargets.some(t => t.r === r && t.step === step) &&
-             game.swoopSource && game.swoopSource.side === side;
+      return game.swoopTargets.some(t => t.r === r && t.step === step);
     }
 
     // Highlight top step swoop destinations
     if (game.mode === 'chooseTopStepSwoop' && game.topStepTargets && game.topStepPiece) {
-      return game.topStepTargets.some(t => t.r === r && t.step === step) &&
-             game.topStepPiece.side === side;
+      return game.topStepTargets.some(t => t.r === r && t.step === step);
     }
 
     // Highlight move destinations (up/down/sideways)
     if (game.mode === 'chooseMoveDest' && game.moveTargets && game.movePiece) {
-      return game.moveTargets.some(t => t.r === r && t.step === step) &&
-             game.movePiece.side === side;
+      return game.moveTargets.some(t => t.r === r && t.step === step);
     }
 
     // Highlight pieces carrying baskets for transfer source selection
     if (game.mode === 'chooseTransferSource') {
       const pl = game.players[game.current];
-      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step);
+      const piece = pl.pieces.find(p => p.r === r && p.step === step);
       return piece && piece.carrying;
     }
 
     // Highlight valid transfer targets
     if (game.mode === 'chooseTransferTarget' && game.transferTargets) {
       const pl = game.players[game.current];
-      const piece = pl.pieces.find(p => p.r === r && p.side === side && p.step === step);
+      const piece = pl.pieces.find(p => p.r === r && p.step === step);
       return piece && game.transferTargets.includes(piece);
     }
 
     // Highlight tailwind options
     if (game.mode === 'tailwind') {
       const opp = game.players[1 - game.current];
-      const oppSide = (1 - game.current === 0) ? 'L' : 'R';
-
-      // Highlight opponent pieces that can advance
-      if (side === oppSide) {
-        const piece = opp.pieces.find(p => p.r === r && p.side === side && p.step === step);
-        if (piece) {
-          const L = LANES[r].L;
-          const dir = piece.carrying ? -1 : +1;
-          const ns = piece.step + dir;
-
-          // Handle advancement beyond final step
-          if (ns > L) {
-            // Non-carrying piece can advance beyond final step (gets removed)
-            return !piece.carrying;
-          }
-
-          // Normal advancement within lane bounds
-          return ns >= 1 && !occupied(r, side, ns);
-        }
-
-        // Highlight spawn positions (step 1) if opponent has < 5 pieces
-        if (step === 1 && opp.pieces.length < 5 && !occupied(r, side, 1)) {
-          return true;
-        }
+      const piece = opp.pieces.find(p => p.r === r && p.step === step);
+      if (piece) {
+        const L = LANES[r].L;
+        const dir = piece.carrying ? -1 : +1;
+        const ns = piece.step + dir;
+        if (ns > L) return !piece.carrying;
+        return ns >= 1; // push model allows
       }
+      if (step === 1 && opp.pieces.length < 5 && !occupied(r, 1)) return true;
     }
 
     // Highlight tailwind swoop destinations
     if (game.mode === 'tailwindChooseSwoop' && game.tailwindSwoopTargets && game.tailwindPiece) {
-      return game.tailwindSwoopTargets.some(t => t.r === r && t.step === step) &&
-             game.tailwindPiece.side === side;
+      return game.tailwindSwoopTargets.some(t => t.r === r && t.step === step);
     }
 
     return false;
@@ -1551,38 +2056,29 @@ export default function App(){
       );
     }
 
-    // Center column (merged final step)
+    // Center column (shared final step)
     if (c === CENTER_COL) {
       const L = lane.L;
       const step = L; // This is the final step
+      const occ = pieceAt(r, step);
 
-      // Find pieces on the final step from both sides
-      const leftPiece = pieceAt(r, 'L', step);
-      const rightPiece = pieceAt(r, 'R', step);
-
-      // Determine classes for the merged final step
-      const cps = checkpoints(L);
-      const dets = deterrents(L, lane.sum);
-      const isCp = cps.includes(step);
-      const isDet = dets.includes(step);
+      // Determine classes via tile map
+      const tt = tileTypeAt(r, step);
+      const isCp = tt === 'Checkpoint';
+      const isDet = tt === 'Deterrent';
 
       let classes = "mobile-cell swoop-tile swoop-center";
       if (isCp) classes += " swoop-cp";
       if (isDet) classes += " swoop-det";
 
-      // Check if either side should be highlighted
-      const leftHighlighted = shouldHighlightTile(r, 'L', step);
-      const rightHighlighted = shouldHighlightTile(r, 'R', step);
-      if (leftHighlighted || rightHighlighted) {
-        classes += " swoop-highlight";
-      }
+      const highlighted = shouldHighlightTile(r, step);
+      if (highlighted) classes += " swoop-highlight";
 
       return (
         <div
           key={`${r}-${c}`}
           className={classes}
-          onClick={leftHighlighted ? () => handleTileClick(r, 'L', step, leftPiece) :
-                   rightHighlighted ? () => handleTileClick(r, 'R', step, rightPiece) : undefined}
+          onClick={highlighted ? () => handleTileClick(r, step, occ) : undefined}
         >
           {/* Step number */}
           <span className="mobile-step-number">{step}</span>
@@ -1591,38 +2087,15 @@ export default function App(){
           {game.baskets[r] && lane.basket && (
             <div className="swoop-basket">🧺</div>
           )}
-
-          {/* Left side piece if present */}
-          {leftPiece && (
-            <div className={`swoop-piece left-piece ${leftPiece.pi === game.current && leftPiece.pc.active ? 'active' : ''} ${leftPiece.pc.carrying ? 'carry' : ''}`}>
+          {occ && (
+            <div className={`swoop-piece ${occ.pi === game.current && occ.pc.active ? 'active' : ''} ${occ.pc.carrying ? 'carry' : ''}`}>
               <span>
-                {leftPiece.pi === game.current && leftPiece.pc.active
-                  ? game.players[leftPiece.pi].activeIcon
-                  : game.players[leftPiece.pi].pieceIcon}
+                {occ.pi === game.current && occ.pc.active
+                  ? game.players[occ.pi].activeIcon
+                  : game.players[occ.pi].pieceIcon}
               </span>
-              {leftPiece.pc.carrying && (
-                <span className="mobile-carry-indicator">↩</span>
-              )}
-              {leftPiece.pi === game.current && leftPiece.pc.active && (
-                <div className="swoop-ring"></div>
-              )}
-            </div>
-          )}
-
-          {/* Right side piece if present */}
-          {rightPiece && (
-            <div className={`swoop-piece right-piece ${rightPiece.pi === game.current && rightPiece.pc.active ? 'active' : ''} ${rightPiece.pc.carrying ? 'carry' : ''}`}>
-              <span>
-                {rightPiece.pi === game.current && rightPiece.pc.active
-                  ? game.players[rightPiece.pi].activeIcon
-                  : game.players[rightPiece.pi].pieceIcon}
-              </span>
-              {rightPiece.pc.carrying && (
-                <span className="mobile-carry-indicator">↩</span>
-              )}
-              {rightPiece.pi === game.current && rightPiece.pc.active && (
-                <div className="swoop-ring"></div>
-              )}
+              {occ.pc.carrying && (<span className="mobile-carry-indicator">↩</span>)}
+              {occ.pi === game.current && occ.pc.active && (<div className="swoop-ring"></div>)}
             </div>
           )}
         </div>
@@ -1630,40 +2103,23 @@ export default function App(){
     }
 
     // Check if this column position corresponds to a game step
-    let side = null;
     let step = null;
-
-    // Check left side (excluding final step which is handled by center column)
-    for (let k = 1; k < lane.L; k++) { // k < lane.L excludes the final step
-      if (colForStep('L', k, lane.L) === c) {
-        side = 'L';
-        step = k;
-        break;
-      }
-    }
-
-    // Check right side if not found on left (excluding final step)
-    if (!side) {
-      for (let k = 1; k < lane.L; k++) { // k < lane.L excludes the final step
-        if (colForStep('R', k, lane.L) === c) {
-          side = 'R';
-          step = k;
-          break;
-        }
-      }
+    // Shared-lane cells only on left arc (final handled above)
+    for (let k = 1; k < lane.L; k++) {
+      if (colForStep('L', k, lane.L) === c) { step = k; break; }
     }
 
     // If this is a valid game position
-    if (side && step) {
-      const occ = pieceAt(r, side, step);
-      const classes = getCellClasses(r, side, step);
-      const isHighlighted = shouldHighlightTile(r, side, step);
+    if (step) {
+      const occ = pieceAt(r, step);
+      const classes = getCellClasses(r, step);
+      const isHighlighted = shouldHighlightTile(r, step);
 
       return (
         <div
           key={`${r}-${c}`}
           className={classes}
-          onClick={isHighlighted ? () => handleTileClick(r, side, step, occ) : undefined}
+          onClick={isHighlighted ? () => handleTileClick(r, step, occ) : undefined}
         >
           {/* Step number */}
           <span className="mobile-step-number">{step}</span>
@@ -1706,6 +2162,36 @@ export default function App(){
 
   return (
     <div className="mobile-game-container" style={{background: 'var(--bg)'}}>
+      {/* Multiplayer Controls */}
+      <div style={{ display:'flex', gap:8, alignItems:'center', padding:'6px 8px', background:'#111', color:'#eee', flexWrap:'wrap' }}>
+        {!mp.connected ? (
+          <>
+            <span style={{opacity:0.85}}>Multiplayer:</span>
+            <input
+              value={mpName}
+              onChange={(e)=>setMpName(e.target.value)}
+              placeholder="Your name"
+              style={{ padding:'6px 8px', borderRadius:6, border:'1px solid #333', background:'#181818', color:'#eee' }}
+            />
+            <input
+              value={mpCodeInput}
+              onChange={(e)=>setMpCodeInput(e.target.value)}
+              placeholder="Room code (e.g. 123456)"
+              style={{ padding:'6px 8px', borderRadius:6, border:'1px solid #333', background:'#181818', color:'#eee' }}
+            />
+            <button className="mobile-button" onClick={mpDoJoin} disabled={mp.joining}>Join</button>
+            <button className="mobile-button" onClick={mpDoCreate} disabled={mp.joining}>Create</button>
+            {mp.error && <span style={{color:'#f88'}}>{mp.error}</span>}
+          </>
+        ) : (
+          <>
+            <span>Room: <b>{mp.code}</b></span>
+            <span>Side: {mp.side===0?'L':mp.side===1?'R':'Spectator'}</span>
+            <span>Version: {mp.version}</span>
+            <button className="mobile-button" onClick={mpDisconnect}>Disconnect</button>
+          </>
+        )}
+      </div>
       {/* Mobile Header - Compact */}
       <div className="mobile-header">
         <div className="mobile-title">
@@ -1714,10 +2200,12 @@ export default function App(){
             <div className={`mobile-score ${game.current === 0 ? 'active-player' : ''}`}>
               <span>🐒</span>
               <span>{game.players[0].score}</span>
+              <span style={{marginLeft: 8}}>✈️ {game.players[0].swoopTokens||0}</span>
             </div>
             <div className={`mobile-score ${game.current === 1 ? 'active-player' : ''}`}>
               <span>🕊️</span>
               <span>{game.players[1].score}</span>
+              <span style={{marginLeft: 8}}>✈️ {game.players[1].swoopTokens||0}</span>
             </div>
           </div>
         </div>
@@ -1755,28 +2243,28 @@ export default function App(){
             <button
               className={`mobile-button primary ${game.mode === 'preroll' ? 'active' : ''}`}
               onClick={roll}
-              disabled={game.mode !== 'preroll' || game.mode === 'gameOver'}
+              disabled={game.mode !== 'preroll' || game.mode === 'gameOver' || !mpCanAct()}
             >
               🎲 Roll
             </button>
             <button
               className="mobile-button"
               onClick={useMove}
-              disabled={game.mode === 'gameOver' || !(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
+              disabled={game.mode === 'gameOver' || !mpCanAct() || !(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
             >
               ➡️ Move
             </button>
             <button
               className="mobile-button"
               onClick={useSwoop}
-              disabled={game.mode === 'gameOver' || !canSwoopThisRoll()}
+              disabled={game.mode === 'gameOver' || !mpCanAct() || !canSwoopNow()}
             >
-              🔄 Swoop
+              🔄 Swoop Token
             </button>
             <button
               className="mobile-button"
               onClick={startTransfer}
-              disabled={game.mode === 'gameOver' || !canTransfer()}
+              disabled={game.mode === 'gameOver' || !mpCanAct() || !canTransfer()}
             >
               🔄 Transfer
             </button>
@@ -1785,6 +2273,7 @@ export default function App(){
               onClick={bankOrBust}
               disabled={(() => {
                 if (game.mode === 'gameOver') return true;
+                if (!mpCanAct()) return true;
                 if (game.mode === 'preroll') return false;
                 if (game.mode === 'rolled' || game.mode === 'pairChosen') {
                   return anyMandatoryActionThisRoll();
@@ -1796,9 +2285,8 @@ export default function App(){
                 if (game.mode === 'preroll') return '🏦 Bank';
                 if (game.mode === 'rolled' || game.mode === 'pairChosen') {
                   const mandatory = anyMandatoryActionThisRoll();
-                  const any = anyActionThisRoll();
                   if (mandatory) return '❌ Must Move';
-                  if (any) return '🏦 Bank';
+                  // During a roll with no legal moves, only Bust is allowed
                   return '💥 Bust';
                 }
                 return '🏦 Bank';
@@ -1843,7 +2331,7 @@ export default function App(){
             </div>
           )}
 
-          {/* Dice and Pairs - Mobile Layout */}
+          {/* Dice and Pairings - Mobile Layout (Can't Stop style) */}
           {game.rolled && (
             <div className="mobile-dice-section">
               <div className="mobile-dice-container">
@@ -1854,15 +2342,28 @@ export default function App(){
                 ))}
               </div>
               <div className="mobile-pairs-container">
-                {game.rolled.pairs.map((p, i) => (
+                {/* New: deduped, legality-aware options; fallback to legacy when missing */}
+                {game.rolled.pairings && computeRollOptions().map((opt, i) => {
+                  const selected = !!(game.pendingAdvances && game.pendingAdvances.length>0 && game.selectedPair && opt.sums.includes(game.selectedPair.sum));
+                  return (
+                    <div
+                      key={`${opt.type}:${opt.sums.join(',')}`}
+                      onClick={() => selectRollOption(opt)}
+                      className={`mobile-pair ${selected ? 'selected' : ''}`}
+                      title={opt.title || ''}
+                    >
+                      <div className="pair-sum">{opt.label}</div>
+                      {opt.reason && (
+                        <div className="pair-reason">{opt.reason}</div>
+                      )}
+                    </div>
+                  );
+                })}
+                {!game.rolled.pairings && game.rolled.pairs && game.rolled.pairs.map((p, i) => (
                   <div
                     key={i}
-                    onClick={() => selectPair(i)}
-                    className={`mobile-pair ${
-                      game.selectedPair && game.selectedPair.i === p.i && game.selectedPair.j === p.j
-                        ? 'selected'
-                        : ''
-                    }`}
+                    onClick={() => showToast('Legacy save: roll once to continue.')}
+                    className={`mobile-pair`}
                   >
                     <div className="pair-sum">{p.sum}</div>
                     <div className="pair-calc">{game.rolled.d[p.i]}+{game.rolled.d[p.j]}</div>
@@ -1878,13 +2379,14 @@ export default function App(){
             <div className="legend-items">
               <div>🧺 Basket • 🟡 Safe • 🟥 Danger</div>
               <div>🐒🐵 Monkeys • 🕊️🦅 Seagulls</div>
-              <div>Roll 3 dice → Pick pair → Move/Swoop</div>
+              <div>Roll 4 dice → Choose a pairing → Advance both if possible</div>
             </div>
           </div>
 
           {/* Secondary Controls */}
           <div className="mobile-secondary-controls">
             <button className="mobile-button-small" onClick={newGame}>🔄 New</button>
+            <button className="mobile-button-small" onClick={undo}>↩️ Undo</button>
             <button className="mobile-button-small" onClick={saveToFile}>💾 Save</button>
             <button className="mobile-button-small" onClick={openLoadModal}>📁 Load</button>
             <button className="mobile-button-small" onClick={quickSave}>⚡ Quick Save</button>
