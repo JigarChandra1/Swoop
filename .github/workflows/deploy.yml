@@ -33,6 +33,10 @@ jobs:
         run: npm ci
 
       - name: Build
+        env:
+          # Configure the backend URL for the static site at build time
+          # Set repository secret SWOOP_BACKEND_URL to your deployed backend (e.g. https://swoop.example.com)
+          VITE_SW_BACKEND_URL: ${{ secrets.SWOOP_BACKEND_URL }}
         run: npm run build
 
       - name: Setup Pages

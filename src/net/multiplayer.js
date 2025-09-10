@@ -52,20 +52,48 @@ export async function pushState(code, { playerId, token, baseVersion, state }) {
 }
 
 export function subscribe(code, onSync) {
-  const url = (BASE_URL ? BASE_URL : '') + `/api/rooms/${code}/stream`;
-  const ev = new EventSource(url, { withCredentials: false });
-  const handler = (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      onSync?.(data);
-    } catch (_) {}
-  };
-  ev.addEventListener('sync', handler);
-  ev.onerror = () => {
-    // Let the browser auto-reconnect
-  };
+  let closed = false;
+  let stop = null;
+
+  function startPolling() {
+    let timer = null;
+    const tick = async () => {
+      if (closed) return;
+      try {
+        const res = await getState(code); // no since -> full check
+        if (!res.unchanged) onSync?.({ code: res.code, version: res.version });
+      } catch (_) { /* ignore */ }
+      timer = setTimeout(tick, 1500);
+    };
+    tick();
+    return () => { if (timer) clearTimeout(timer); };
+  }
+
+  try {
+    const url = (BASE_URL ? BASE_URL : '') + `/api/rooms/${code}/stream`;
+    const ev = new EventSource(url, { withCredentials: false });
+    let opened = false;
+    const handler = (e) => {
+      try { const data = JSON.parse(e.data); onSync?.(data); } catch (_) {}
+    };
+    ev.addEventListener('open', () => { opened = true; });
+    ev.addEventListener('sync', handler);
+    ev.onerror = () => {
+      // If the connection failed to open or was closed, fall back to polling
+      if (!opened || ev.readyState === 2 /* CLOSED */) {
+        try { ev.close(); } catch (_) {}
+        if (!stop) stop = startPolling();
+      }
+    };
+    stop = () => { try { ev.close(); } catch (_) {}; };
+  } catch (_) {
+    // EventSource not available — poll
+    stop = startPolling();
+  }
+
   return () => {
-    try { ev.close(); } catch (_) {}
+    closed = true;
+    if (typeof stop === 'function') stop();
   };
 }
 

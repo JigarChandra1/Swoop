@@ -76,6 +76,34 @@ Notes:
 - The client also auto-detects `http://localhost:4000` when running on `localhost:5173`.
 - You can still override with `VITE_SW_BACKEND_URL` if you prefer.
 
+### Deploying Frontend on GitHub Pages
+
+GitHub Pages is static hosting; it cannot run the Node backend. You can still deploy the React app there, and point it at a backend deployed elsewhere (Render/Railway/Fly/Cloudflare/Vercel, etc.).
+
+- Backend: deploy `server/index.js` to your host of choice (e.g. `https://swoop.yourdomain.com`). Set `CORS_ORIGIN` to your Pages URL (e.g. `https://<user>.github.io`).
+- Frontend build: the deploy workflow accepts a secret `SWOOP_BACKEND_URL` and injects it as `VITE_SW_BACKEND_URL` at build time. Set the repository secret to your backend URL.
+- Runtime override (no rebuild): the app also reads `window.SW_BACKEND_URL`. You can set it by visiting your Pages link with a `?backend=` query once, for example:
+  - `https://<user>.github.io/Swoop/?backend=https://swoop.yourdomain.com`
+  The value is stored in `localStorage` and used on subsequent visits.
+
+### Deploying on Vercel (frontend + API)
+
+Vercel can host the static frontend and the API as serverless functions in one project.
+
+- Frontend: built with Vite to `dist` (Vercel auto-detects). Base path is `/` by default.
+- API: a single function at `api/[...path].js` wraps the Express app via `serverless-http`, serving all `/api/*` endpoints.
+
+Steps:
+
+1) Push this repo to a new Vercel project. No special settings needed; Vercel will run `npm install` and `npm run build` and publish `dist`.
+2) Environment vars (optional):
+   - `CORS_ORIGIN` (only needed if you serve the API cross-origin; same-origin on Vercel does not need CORS).
+   - `VITE_BASE_PATH` (default `/`).
+3) Limitations on Vercel serverless (for now):
+   - API state is in-memory per serverless instance. It may reset on cold starts and is not shared across concurrent instances. For reliability, migrate to SQLite or a managed store.
+   - SSE is not guaranteed on Node serverless; the client automatically falls back to polling if SSE is unavailable.
+
+
 ## React Implementation
 
 The game logic is implemented in React and bundled with [Vite](https://vitejs.dev/).

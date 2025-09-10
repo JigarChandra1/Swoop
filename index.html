@@ -67,6 +67,24 @@
     </div>
 
     <div id="root"></div>
+    <script>
+      // Optional runtime backend URL configuration for static hosting (e.g., GitHub Pages)
+      // Usage: add ?backend=https://your-backend.example.com to the URL once
+      // It will persist in localStorage and be picked up by the app.
+      (function(){
+        try {
+          var p = new URLSearchParams(location.search);
+          var b = p.get('backend');
+          if (b) {
+            window.SW_BACKEND_URL = b;
+            try { localStorage.setItem('SW_BACKEND_URL', b); } catch(_){}
+          } else {
+            var saved = null; try { saved = localStorage.getItem('SW_BACKEND_URL'); } catch(_){}
+            if (saved) window.SW_BACKEND_URL = saved;
+          }
+        } catch(_){}
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
