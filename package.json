@@ -6,6 +6,7 @@
     "dev:mobile": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
+    "server": "node server/index.js",
     "simulate": "node src/sim/simulate.js",
     "ui:play": "node scripts/ui_autoplay.js",
     "ui:play:watch": "HEADLESS=0 SLOW_MO=250 node scripts/ui_autoplay.js",
@@ -15,7 +16,9 @@
   },
   "dependencies": {
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.0.0",

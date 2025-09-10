@@ -10,20 +10,25 @@
     <meta name="theme-color" content="#2563eb" />
     <title>Swoop - Mobile Game</title>
     <style>
-      /* Prevent iOS bounce scrolling and zoom */
-      html, body {
-        height: 100%;
-        overflow: hidden;
-        position: fixed;
-        width: 100%;
-        -webkit-overflow-scrolling: touch;
-        -webkit-user-select: none;
-        -webkit-touch-callout: none;
-        -webkit-tap-highlight-color: transparent;
+      /* Default: do not show the orientation hint */
+      .orientation-hint { display: none; }
+
+      /* Prevent iOS bounce scrolling and zoom — mobile only */
+      @media (hover: none) and (pointer: coarse) {
+        html, body {
+          height: 100%;
+          overflow: hidden;
+          position: fixed;
+          width: 100%;
+          -webkit-overflow-scrolling: touch;
+          -webkit-user-select: none;
+          -webkit-touch-callout: none;
+          -webkit-tap-highlight-color: transparent;
+        }
       }
 
-      /* Force landscape orientation hint */
-      @media screen and (orientation: portrait) {
+      /* Show orientation hint only on small portrait touch screens */
+      @media screen and (orientation: portrait) and (max-width: 900px) and (hover: none) and (pointer: coarse) {
         .orientation-hint {
           position: fixed;
           top: 0;

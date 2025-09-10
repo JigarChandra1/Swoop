@@ -1,4 +1,5 @@
 import React from 'react';
+import { createRoom as mpCreateRoom, joinRoom as mpJoinRoom, getState as mpGetState, pushState as mpPushState, subscribe as mpSubscribe, saveCreds as mpSaveCreds, loadCreds as mpLoadCreds } from './net/multiplayer.js';
 
 const LANES = [
   {sum:2, L:3, basket:true},
@@ -136,6 +137,27 @@ export default function App(){
   const [showLoadModal, setShowLoadModal] = React.useState(false);
   const [loadText, setLoadText] = React.useState('');
 
+  // Multiplayer state
+  const [mp, setMp] = React.useState({ connected:false, code:'', version:null, playerId:null, token:null, side:null, joining:false, error:null });
+  const [mpName, setMpName] = React.useState('');
+  const [mpCodeInput, setMpCodeInput] = React.useState('');
+  const mpApplyingRef = React.useRef(false); // avoid push on remote apply
+  const mpUnsubRef = React.useRef(null);
+  const mpPushTimerRef = React.useRef(null);
+  const mpVersionRef = React.useRef(null);
+  const mpLastSnapshotRef = React.useRef(null); // last snapshot we synced with server (string)
+  const mpPendingRemoteRef = React.useRef(null); // { state, version }
+  const gameModeRef = React.useRef('preroll');
+  React.useEffect(() => { gameModeRef.current = game.mode; }, [game.mode]);
+
+  function mpCanAct() {
+    if (!mp.connected) return true;
+    if (mp.side !== 0 && mp.side !== 1) return false; // spectator
+    const isTailwind = game.mode === 'tailwind' || game.mode === 'tailwindTopStepChoice' || game.mode === 'tailwindChooseSwoop';
+    if (isTailwind) return mp.side === (1 - game.current);
+    return mp.side === game.current;
+  }
+
   // Undo history (stack of prior snapshots) and bookkeeping
   const historyRef = React.useRef([]); // array of snapshot objects from getState()
   const prevSnapshotRef = React.useRef(null); // JSON string of previous snapshot
@@ -163,8 +185,162 @@ export default function App(){
     }
 
     try { localStorage.setItem('SWOOP_STATE_V60', currJson); } catch (e) {}
+    // Multiplayer: debounce push of state when connected and not applying remote
+    if (mp.connected && mp.playerId && !mpApplyingRef.current) {
+      // Always attempt to push; server enforces turn ownership based on its pre-update state.
+      // Avoid pushing transient/choice UIs that aren't fully serializable
+      const transientModes = new Set([
+        'chooseMoveDest', 'choosePiece',
+        'chooseSwoop', 'pickSwoopDest', 'chooseTopStepSwoop',
+        'chooseTransferSource', 'chooseTransferTarget',
+        'tailwind', 'tailwindTopStepChoice', 'tailwindChooseSwoop'
+      ]);
+      if (transientModes.has(game.mode)) {
+        return; // wait for a stable state before syncing
+      }
+      // Skip if snapshot matches last synced
+      if (mpLastSnapshotRef.current && mpLastSnapshotRef.current === currJson) {
+        return;
+      }
+      if (mpPushTimerRef.current) clearTimeout(mpPushTimerRef.current);
+      mpPushTimerRef.current = setTimeout(async () => {
+        try {
+          const payload = { playerId: mp.playerId, token: mp.token, baseVersion: mp.version, state: JSON.parse(currJson) };
+          const resp = await mpPushState(mp.code, payload);
+          setMp(prev => ({ ...prev, version: resp.version }));
+          // Mark snapshot as synced
+          mpLastSnapshotRef.current = currJson;
+        } catch (err) {
+          if (err && err.status === 409) {
+            // Version conflict: fetch latest and apply silently
+            try {
+              const fresh = await mpGetState(mp.code);
+              if (!fresh.unchanged) {
+                mpApplyingRef.current = true;
+                setState(fresh.state, { silent: true });
+                setMp(prev => ({ ...prev, version: fresh.version }));
+                try { mpLastSnapshotRef.current = JSON.stringify(fresh.state); } catch(_){}
+                mpApplyingRef.current = false;
+              }
+            } catch (_) {}
+          } else if (err && (err.status === 403 || err.status === 404)) {
+            setMp(prev => ({ ...prev, error: 'Disconnected from room', connected:false }));
+            showToast('Disconnected from room.');
+          }
+        }
+      }, 250);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [game]);
+
+  // Clean up push timer on unmount
+  React.useEffect(() => () => { if (mpPushTimerRef.current) clearTimeout(mpPushTimerRef.current); }, []);
+
+  // Subscribe to room version updates via SSE
+  React.useEffect(() => {
+    if (!mp.connected || !mp.code) return;
+    if (mpUnsubRef.current) { try { mpUnsubRef.current(); } catch(_){} }
+    const unsub = mpSubscribe(mp.code, async (data) => {
+      if (!data || typeof data.version !== 'number') return;
+      // Fetch latest state if version moved forward
+      try {
+        const resp = await mpGetState(mp.code, mpVersionRef.current);
+        if (!resp.unchanged) {
+          // If we're in a transient UI, defer applying to avoid interrupting
+          const transientModes = new Set([
+            'chooseMoveDest', 'choosePiece',
+            'chooseSwoop', 'pickSwoopDest', 'chooseTopStepSwoop',
+            'chooseTransferSource', 'chooseTransferTarget',
+            'tailwind', 'tailwindTopStepChoice', 'tailwindChooseSwoop'
+          ]);
+          if (transientModes.has(gameModeRef.current)) {
+            mpPendingRemoteRef.current = { state: resp.state, version: resp.version };
+          } else {
+            mpApplyingRef.current = true;
+            setState(resp.state, { silent: true });
+            setMp(prev => ({ ...prev, version: resp.version }));
+            try { mpLastSnapshotRef.current = JSON.stringify(resp.state); } catch(_){}
+            mpApplyingRef.current = false;
+          }
+        }
+      } catch(_){}
+    });
+    mpUnsubRef.current = unsub;
+    return () => { try { unsub(); } catch(_){} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mp.connected, mp.code]);
+
+  // keep ref in sync with version
+  React.useEffect(() => { mpVersionRef.current = mp.version; }, [mp.version]);
+
+  // When leaving a transient mode, apply any deferred remote state
+  React.useEffect(() => {
+    const transientModes = new Set([
+      'chooseMoveDest', 'choosePiece',
+      'chooseSwoop', 'pickSwoopDest', 'chooseTopStepSwoop',
+      'chooseTransferSource', 'chooseTransferTarget',
+      'tailwind', 'tailwindTopStepChoice', 'tailwindChooseSwoop'
+    ]);
+    if (!transientModes.has(game.mode) && mpPendingRemoteRef.current) {
+      const pending = mpPendingRemoteRef.current;
+      mpPendingRemoteRef.current = null;
+      mpApplyingRef.current = true;
+      setState(pending.state, { silent: true });
+      setMp(prev => ({ ...prev, version: pending.version }));
+      try { mpLastSnapshotRef.current = JSON.stringify(pending.state); } catch(_){}
+      mpApplyingRef.current = false;
+    }
+  }, [game.mode]);
+
+  async function mpDoCreate() {
+    if (mp.joining) return;
+    setMp(prev => ({ ...prev, joining: true, error:null }));
+    try {
+      const created = await mpCreateRoom();
+      const code = created.code;
+      // Immediately join the room
+      const jr = await mpJoinRoom(code, { name: mpName || undefined, preferredSide: 0 });
+      mpSaveCreds(code, { playerId: jr.playerId, token: jr.token, name: jr.room?.players?.find(p=>p.id===jr.playerId)?.name, side: jr.side });
+      mpApplyingRef.current = true;
+      setState(jr.state, { silent: true });
+      try { mpLastSnapshotRef.current = JSON.stringify(jr.state); } catch(_){}
+      mpApplyingRef.current = false;
+      setMp({ connected:true, code, version: jr.version, playerId: jr.playerId, token: jr.token, side: jr.side, joining:false, error:null });
+      showToast(`Room ${code} ready!`);
+    } catch (e) {
+      console.error(e);
+      setMp(prev => ({ ...prev, joining:false, error: 'Failed to create room' }));
+      showToast('Failed to create room.');
+    }
+  }
+
+  async function mpDoJoin() {
+    const code = (mpCodeInput || '').trim();
+    if (!code) { showToast('Enter a room code'); return; }
+    if (mp.joining) return;
+    setMp(prev => ({ ...prev, joining: true, error:null }));
+    try {
+      const jr = await mpJoinRoom(code, { name: mpName || undefined });
+      mpSaveCreds(code, { playerId: jr.playerId, token: jr.token, name: jr.room?.players?.find(p=>p.id===jr.playerId)?.name, side: jr.side });
+      mpApplyingRef.current = true;
+      setState(jr.state, { silent: true });
+      try { mpLastSnapshotRef.current = JSON.stringify(jr.state); } catch(_){}
+      mpApplyingRef.current = false;
+      setMp({ connected:true, code, version: jr.version, playerId: jr.playerId, token: jr.token, side: jr.side, joining:false, error:null });
+      showToast(`Joined room ${code}`);
+    } catch (e) {
+      console.error(e);
+      setMp(prev => ({ ...prev, joining:false, error: 'Failed to join room' }));
+      showToast('Failed to join room.');
+    }
+  }
+
+  function mpDisconnect() {
+    if (mpUnsubRef.current) { try { mpUnsubRef.current(); } catch(_){} mpUnsubRef.current = null; }
+    setMp({ connected:false, code:'', version:null, playerId:null, token:null, side:null, joining:false, error:null });
+    mpLastSnapshotRef.current = null;
+    showToast('Left room (local only)');
+  }
 
   function undo(){
     const hist = historyRef.current;
@@ -1216,6 +1392,12 @@ export default function App(){
   }
 
   function handleTileClick(r, step, occ) {
+    // Prevent board interactions when not the acting side
+    const isTailwind = game.mode === 'tailwind' || game.mode === 'tailwindTopStepChoice' || game.mode === 'tailwindChooseSwoop';
+    if (mp.connected) {
+      if (!isTailwind && mp.side !== game.current) return;
+      if (isTailwind && mp.side !== (1 - game.current)) return;
+    }
     if (game.mode === 'choosePiece') {
       // Click on a piece to select it for movement
       if (occ && occ.pi === game.current && game.pieceChoices) {
@@ -1649,7 +1831,7 @@ function setState(state, options = {}){
     const newGame = {
         players: [
           {
-            name: 'Monkeys',
+            name: state.players?.[0]?.name || 'Monkeys',
             pieceIcon: '🐒',
             activeIcon: '🐵',
             score: state.players[0].score,
@@ -1657,7 +1839,7 @@ function setState(state, options = {}){
             pieces: state.players[0].pieces || []
           },
           {
-            name: 'Seagulls',
+            name: state.players?.[1]?.name || 'Seagulls',
             pieceIcon: '🕊️',
             activeIcon: '🦅',
             score: state.players[1].score,
@@ -1784,6 +1966,12 @@ function setState(state, options = {}){
   }
 
   function shouldHighlightTile(r, step) {
+    // Disable highlights for non-acting clients (prevents click affordances)
+    if (mp.connected) {
+      const isTailwind = game.mode === 'tailwind' || game.mode === 'tailwindTopStepChoice' || game.mode === 'tailwindChooseSwoop';
+      if (!isTailwind && mp.side !== game.current) return false;
+      if (isTailwind && mp.side !== (1 - game.current)) return false;
+    }
     // Highlight pieces available for selection
     if (game.mode === 'choosePiece' && game.pieceChoices) {
       return game.pieceChoices.some(p => p.r === r && p.step === step);
@@ -1974,6 +2162,36 @@ function setState(state, options = {}){
 
   return (
     <div className="mobile-game-container" style={{background: 'var(--bg)'}}>
+      {/* Multiplayer Controls */}
+      <div style={{ display:'flex', gap:8, alignItems:'center', padding:'6px 8px', background:'#111', color:'#eee', flexWrap:'wrap' }}>
+        {!mp.connected ? (
+          <>
+            <span style={{opacity:0.85}}>Multiplayer:</span>
+            <input
+              value={mpName}
+              onChange={(e)=>setMpName(e.target.value)}
+              placeholder="Your name"
+              style={{ padding:'6px 8px', borderRadius:6, border:'1px solid #333', background:'#181818', color:'#eee' }}
+            />
+            <input
+              value={mpCodeInput}
+              onChange={(e)=>setMpCodeInput(e.target.value)}
+              placeholder="Room code (e.g. 123456)"
+              style={{ padding:'6px 8px', borderRadius:6, border:'1px solid #333', background:'#181818', color:'#eee' }}
+            />
+            <button className="mobile-button" onClick={mpDoJoin} disabled={mp.joining}>Join</button>
+            <button className="mobile-button" onClick={mpDoCreate} disabled={mp.joining}>Create</button>
+            {mp.error && <span style={{color:'#f88'}}>{mp.error}</span>}
+          </>
+        ) : (
+          <>
+            <span>Room: <b>{mp.code}</b></span>
+            <span>Side: {mp.side===0?'L':mp.side===1?'R':'Spectator'}</span>
+            <span>Version: {mp.version}</span>
+            <button className="mobile-button" onClick={mpDisconnect}>Disconnect</button>
+          </>
+        )}
+      </div>
       {/* Mobile Header - Compact */}
       <div className="mobile-header">
         <div className="mobile-title">
@@ -2025,28 +2243,28 @@ function setState(state, options = {}){
             <button
               className={`mobile-button primary ${game.mode === 'preroll' ? 'active' : ''}`}
               onClick={roll}
-              disabled={game.mode !== 'preroll' || game.mode === 'gameOver'}
+              disabled={game.mode !== 'preroll' || game.mode === 'gameOver' || !mpCanAct()}
             >
               🎲 Roll
             </button>
             <button
               className="mobile-button"
               onClick={useMove}
-              disabled={game.mode === 'gameOver' || !(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
+              disabled={game.mode === 'gameOver' || !mpCanAct() || !(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
             >
               ➡️ Move
             </button>
             <button
               className="mobile-button"
               onClick={useSwoop}
-              disabled={game.mode === 'gameOver' || !canSwoopNow()}
+              disabled={game.mode === 'gameOver' || !mpCanAct() || !canSwoopNow()}
             >
               🔄 Swoop Token
             </button>
             <button
               className="mobile-button"
               onClick={startTransfer}
-              disabled={game.mode === 'gameOver' || !canTransfer()}
+              disabled={game.mode === 'gameOver' || !mpCanAct() || !canTransfer()}
             >
               🔄 Transfer
             </button>
@@ -2055,6 +2273,7 @@ function setState(state, options = {}){
               onClick={bankOrBust}
               disabled={(() => {
                 if (game.mode === 'gameOver') return true;
+                if (!mpCanAct()) return true;
                 if (game.mode === 'preroll') return false;
                 if (game.mode === 'rolled' || game.mode === 'pairChosen') {
                   return anyMandatoryActionThisRoll();
