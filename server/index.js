@@ -1,10 +1,15 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const { createStore } = require('./storage');
 
-// In-memory store. In future, swap for SQLite/local storage.
-// rooms: code -> { code, createdAt, lastActivity, version, state, players: Map, sseClients: Set }
-const rooms = new Map();
+// Runtime cache with optional persistence (KV/file/memory)
+// roomsCache: code -> { code, createdAt, lastActivity, version, state, players: Map, sseClients: Set }
+const roomsCache = new Map();
+const store = createStore();
+const STORE_PREFIX = process.env.STORE_PREFIX || 'swoop';
+const roomKey = (code) => `${STORE_PREFIX}:room:${code}`;
+const indexKey = () => `${STORE_PREFIX}:rooms`;
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -31,9 +36,7 @@ function genId(bytes = 12) {
 function genRoomCode() {
   // 6 digit numeric code, avoid leading zero by range 100000-999999
   let code;
-  do {
-    code = String(Math.floor(100000 + Math.random() * 900000));
-  } while (rooms.has(code));
+  code = String(Math.floor(100000 + Math.random() * 900000));
   return code;
 }
 
@@ -74,18 +77,65 @@ function initialGame() {
   };
 }
 
-function createRoom() {
-  const code = genRoomCode();
+async function saveRoomPersistent(room){
+  const payload = {
+    code: room.code,
+    createdAt: room.createdAt,
+    lastActivity: room.lastActivity,
+    version: room.version,
+    state: room.state,
+    players: Array.from(room.players.values()),
+  };
+  try { await store.set(roomKey(room.code), payload); } catch(_) {}
+  try { await store.sadd(indexKey(), room.code); } catch(_) {}
+}
+
+async function loadRoomPersistent(code){
+  let raw = null;
+  try { raw = await store.get(roomKey(code)); } catch(_) {}
+  if (!raw) return null;
+  let data = raw;
+  if (typeof raw === 'string') {
+    try { data = JSON.parse(raw); } catch(_) { return null; }
+  }
+  const room = {
+    code: data.code,
+    createdAt: data.createdAt,
+    lastActivity: data.lastActivity,
+    version: data.version,
+    state: data.state,
+    players: new Map(),
+    sseClients: new Set(),
+  };
+  (data.players || []).forEach(p => room.players.set(p.id, p));
+  roomsCache.set(code, room);
+  return room;
+}
+
+async function getRoom(code){
+  if (roomsCache.has(code)) return roomsCache.get(code);
+  return await loadRoomPersistent(code);
+}
+
+async function createRoom(){
+  let code;
+  for (let i=0;i<5;i++){
+    code = genRoomCode();
+    const exists = await store.get(roomKey(code)).catch(() => null);
+    if (!exists) break; else code = null;
+  }
+  if (!code) code = genRoomCode();
   const room = {
     code,
     createdAt: Date.now(),
     lastActivity: Date.now(),
     version: 1,
     state: initialGame(),
-    players: new Map(), // playerId -> { id, name, token, side: 0|1|null, joinedAt }
+    players: new Map(), // playerId -> { id, name, token, side }
     sseClients: new Set(),
   };
-  rooms.set(code, room);
+  roomsCache.set(code, room);
+  await saveRoomPersistent(room);
   return room;
 }
 
@@ -95,9 +145,10 @@ function getPublicRoom(room) {
   return { code: room.code, version: room.version, createdAt: room.createdAt, lastActivity: room.lastActivity, players };
 }
 
-function bumpVersion(room) {
+async function bumpVersion(room) {
   room.version += 1;
   room.lastActivity = Date.now();
+  await saveRoomPersistent(room);
   // Broadcast to SSE listeners
   const payload = `event: sync\ndata: ${JSON.stringify({ code: room.code, version: room.version })}\n\n`;
   for (const res of room.sseClients) {
@@ -106,20 +157,21 @@ function bumpVersion(room) {
 }
 
 // --- Routes ---
-app.get('/', (_req, res) => {
-  res.json({ ok: true, service: 'swoop-backend', rooms: rooms.size });
+app.get('/', async (_req, res) => {
+  let count = 0; try { count = (await store.smembers(indexKey())).length; } catch(_) { count = roomsCache.size; }
+  res.json({ ok: true, service: 'swoop-backend', rooms: count, storage: store.kind });
 });
 
 // Create a new room
-app.post('/api/rooms', (req, res) => {
-  const room = createRoom();
+app.post('/api/rooms', async (req, res) => {
+  const room = await createRoom();
   res.status(201).json({ code: room.code, version: room.version, state: room.state, room: getPublicRoom(room) });
 });
 
 // Join a room with a name and optional preferred side (0|1)
-app.post('/api/rooms/:code/join', (req, res) => {
+app.post('/api/rooms/:code/join', async (req, res) => {
   const { code } = req.params;
-  const room = rooms.get(code);
+  const room = await getRoom(code);
   if (!room) return res.status(404).json({ error: 'room_not_found' });
   const { name, preferredSide } = req.body || {};
   const id = genId(10);
@@ -142,17 +194,17 @@ app.post('/api/rooms/:code/join', (req, res) => {
   // If seated, update visible name in state
   if (side === 0 || side === 1) {
     room.state.players[side].name = player.name;
-    bumpVersion(room);
+    await bumpVersion(room);
   }
-
+  await saveRoomPersistent(room);
   res.status(201).json({ playerId: id, token, side, room: getPublicRoom(room), version: room.version, state: room.state });
 });
 
 // Get current room state (optionally delta check)
-app.get('/api/rooms/:code/state', (req, res) => {
+app.get('/api/rooms/:code/state', async (req, res) => {
   const { code } = req.params;
   const { since } = req.query;
-  const room = rooms.get(code);
+  const room = await getRoom(code);
   if (!room) return res.status(404).json({ error: 'room_not_found' });
   const sinceNum = since ? Number(since) : null;
   if (sinceNum && sinceNum === room.version) {
@@ -162,10 +214,10 @@ app.get('/api/rooms/:code/state', (req, res) => {
 });
 
 // Push a new full snapshot state (optimistic concurrency via baseVersion)
-app.post('/api/rooms/:code/state', (req, res) => {
+app.post('/api/rooms/:code/state', async (req, res) => {
   const { code } = req.params;
   const { playerId, token, baseVersion, state } = req.body || {};
-  const room = rooms.get(code);
+  const room = await getRoom(code);
   if (!room) return res.status(404).json({ error: 'room_not_found' });
 
   if (!playerId || !token) return res.status(400).json({ error: 'auth_required' });
@@ -217,14 +269,14 @@ app.post('/api/rooms/:code/state', (req, res) => {
   } catch (_) {
     room.state = state; // fallback — but names/icons likely preserved
   }
-  bumpVersion(room);
+  await bumpVersion(room);
   res.json({ ok: true, version: room.version });
 });
 
 // Server-Sent Events stream for room updates
-app.get('/api/rooms/:code/stream', (req, res) => {
+app.get('/api/rooms/:code/stream', async (req, res) => {
   const { code } = req.params;
-  const room = rooms.get(code);
+  const room = await getRoom(code);
   if (!room) return res.status(404).json({ error: 'room_not_found' });
 
   res.writeHead(200, {
@@ -243,15 +295,25 @@ app.get('/api/rooms/:code/stream', (req, res) => {
 });
 
 // Lightweight health + debug
-app.get('/api/rooms', (_req, res) => {
-  res.json({ count: rooms.size, rooms: Array.from(rooms.values()).map(getPublicRoom) });
+app.get('/api/rooms', async (_req, res) => {
+  let codes = [];
+  try { codes = await store.smembers(indexKey()); } catch(_) {}
+  const list = [];
+  for (const code of codes) {
+    const r = await getRoom(code);
+    if (r) list.push(getPublicRoom(r));
+  }
+  for (const [code, r] of roomsCache) {
+    if (!codes.includes(code)) list.push(getPublicRoom(r));
+  }
+  res.json({ count: list.length, rooms: list });
 });
 
 // Cleanup: prune rooms idle for > 24h
 setInterval(() => {
   const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-  for (const [code, room] of rooms) {
-    if (room.lastActivity < cutoff) rooms.delete(code);
+  for (const [code, room] of roomsCache) {
+    if (room.lastActivity < cutoff) roomsCache.delete(code);
   }
 }, 60 * 60 * 1000);
 

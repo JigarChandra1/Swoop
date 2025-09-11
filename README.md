@@ -38,6 +38,7 @@ Allow CORS by origin with `CORS_ORIGIN`, otherwise `*`.
 Notes:
 - The server is the source of truth for the game snapshot, but rule enforcement is intentionally minimal for now.
 - Version is bumped for state updates and for seat/name changes when players join.
+- Storage: by default the server keeps room state in memory; when available it persists to a store (see below).
 
 ### Frontend helper (optional)
 
@@ -102,6 +103,22 @@ Steps:
 3) Limitations on Vercel serverless (for now):
    - API state is in-memory per serverless instance. It may reset on cold starts and is not shared across concurrent instances. For reliability, migrate to SQLite or a managed store.
    - SSE is not guaranteed on Node serverless; the client automatically falls back to polling if SSE is unavailable.
+
+### Persistent storage (Vercel KV / local file / memory)
+
+The backend now supports pluggable storage via environment detection:
+
+- Vercel KV (Upstash Redis) — set both env vars:
+  - `KV_REST_API_URL`
+  - `KV_REST_API_TOKEN`
+  When present, rooms are stored under keys `swoop:room:<code>` and an index set `swoop:rooms`.
+
+- Local file (for `npm run server`) — optional:
+  - Set `STORAGE_FILE=server-data/rooms.json` (default used in development). The server will create/update the JSON file.
+
+- Memory (fallback) — no env vars required.
+
+You can override the key prefix with `STORE_PREFIX`.
 
 
 ## React Implementation
