@@ -1137,9 +1137,15 @@ export default function App(){
     }
     let s2;
     if (dr === 0) {
-      // Same-lane push: move by step delta; no gap snap-down needed
+      // Same-lane push: move by step delta. If it goes beyond bounds, remove the pushed piece.
       const L2 = LANES[r2].L;
-      s2 = Math.max(1, Math.min(L2, dest.step + dsSteps));
+      const candidate = dest.step + dsSteps;
+      if (candidate < 1 || candidate > L2) {
+        const pl = newGame.players[occPi];
+        pl.pieces = pl.pieces.filter(p=>p!==occPc);
+        return;
+      }
+      s2 = candidate;
     } else {
       // Cross-lane push: use geometric spaces and snap-down on gap
       let targetSpace = destSpace + dSpace;

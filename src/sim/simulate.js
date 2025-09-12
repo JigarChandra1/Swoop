@@ -453,8 +453,15 @@ function applyPushChain(game, origin, dest, pusher, _isSwoop = false){
   }
   let s2;
   if (dr === 0) {
+    // Same-lane push: move by step delta; if it overflows lane bounds, remove pushed piece
     const L2 = LANES[r2].L;
-    s2 = Math.max(1, Math.min(L2, dest.step + dsSteps));
+    const candidate = dest.step + dsSteps;
+    if (candidate < 1 || candidate > L2) {
+      const owner = game.players[occPi];
+      owner.pieces = owner.pieces.filter(p=>p!==occPc);
+      return;
+    }
+    s2 = candidate;
   } else {
     // Compute target space for pushed piece
     let targetSpace = destSpace + dSpace;
