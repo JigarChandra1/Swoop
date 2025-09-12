@@ -805,6 +805,119 @@ export default function App(){
     setGame(newGame);
   }
 
+  // Build list of allowed sums for current UI context
+  function allowedSumsForCurrentRoll(){
+    if(!game.rolled || !game.rolled.pairings) return [];
+    // If a pairing has been chosen, only the currently selected sum is actionable
+    if(game.mode === 'pairChosen' && game.pendingAdvances && game.selectedPair){
+      return [game.selectedPair.sum];
+    }
+    const opts = computeRollOptions();
+    const set = new Set();
+    for(const opt of opts){ for(const s of (opt.sums||[])) set.add(s); }
+    return Array.from(set).sort((a,b)=>a-b);
+  }
+
+  // Prefer a double option when available; otherwise fall back to single option for the sum
+  function pickAdvanceSequenceForSum(sum){
+    if(!game.rolled || !game.rolled.pairings) return null;
+    if(game.mode === 'pairChosen' && game.pendingAdvances && game.selectedPair && game.pendingAdvances.includes(sum)){
+      return [...game.pendingAdvances];
+    }
+    const opts = computeRollOptions();
+    const dbl = opts.find(o => o.type === 'double' && o.sums && o.sums.includes(sum));
+    if(dbl){
+      // If both sums are identical (e.g., 6 and 6), schedule the second move with the same sum
+      if (Array.isArray(dbl.sums) && dbl.sums.length === 2) {
+        const other = (dbl.sums[0] === sum) ? dbl.sums[1] : dbl.sums[0];
+        return [sum, (other !== undefined ? other : sum)];
+      }
+      return [sum];
+    }
+    const sgl = opts.find(o => o.type === 'single' && o.sums && o.sums.includes(sum));
+    if(sgl) return [sum];
+    return null;
+  }
+
+  // Candidate generator for direct Up/Down actions on a given sum
+  function directionalCandidatesForSum(pl, sum, dir){
+    const r = LANES.findIndex(x => x.sum === sum);
+    if(r < 0) return [];
+    const out = [];
+    const piecesOnRoute = pl.pieces.filter(p => p.r === r);
+
+    // Existing pieces that could move in the requested direction
+    for(const pc of piecesOnRoute){
+      // Must be activatable within the 2-active-piece cap
+      if(!pc.active && activeCount(pl) >= 2) continue;
+      const targets = getMoveTargets(pc);
+      const desiredStep = dir === 'up' ? (pc.step + 1) : (pc.step - 1);
+      const t = targets.find(tg => tg.r === pc.r && tg.step === desiredStep);
+      if(t){
+        out.push({ pc, target: t, willActivate: !pc.active });
+      }
+    }
+
+    // Spawning a new piece (only for Up): no piece on route yet and spawn is legal
+    if(piecesOnRoute.length === 0 && dir === 'up'){
+      if(pl.pieces.length < 5 && activeCount(pl) < 2 && !occupied(r, 1)){
+        out.push({ spawn: true, r });
+      }
+    }
+    return out;
+  }
+
+  // Direct, single-click move for a sum and direction (up/down). Sets pairing context and executes the move.
+  function quickMove(sum, dir){
+    if(game.mode !== 'rolled' && game.mode !== 'pairChosen') return;
+    const seq = pickAdvanceSequenceForSum(sum);
+    if(!seq) { showToast(`No legal move for ${sum}.`); return; }
+
+    const newGame = { ...game };
+    // Establish/refresh the pairing context
+    newGame.selectedPair = { sum };
+    newGame.pendingAdvances = [...seq];
+    newGame.mode = 'pairChosen';
+    newGame.message = seq.length === 2
+      ? `${newGame.players[newGame.current].name}: Move ${seq[0]} then ${seq[1]}.`
+      : `${newGame.players[newGame.current].name}: Only ${seq[0]} is possible — Move.`;
+
+    const pl = newGame.players[newGame.current];
+    const cands = directionalCandidatesForSum(pl, sum, dir);
+    if(cands.length === 0){
+      // Keep the selection (so player can pick a different action) but inform about direction unavailability
+      setGame(newGame);
+      showToast(`No ${dir === 'up' ? 'Up' : 'Down'} move on ${sum}.`);
+      return;
+    }
+
+    // If more than one candidate piece, let the player choose which one, and auto-apply the requested direction after selection
+    const nonSpawn = cands.filter(c => !c.spawn);
+    if(nonSpawn.length > 1){
+      newGame.mode = 'choosePiece';
+      newGame.pieceChoices = nonSpawn.map(c => c.pc);
+      newGame.selectedSum = sum;
+      newGame.quickMoveDir = dir; // remember requested direction
+      newGame.message = `${pl.name}: Choose piece to move ${dir === 'up' ? 'Up' : 'Down'}.`;
+      setGame(newGame);
+      return;
+    }
+
+    // Single candidate path
+    const c = cands[0];
+    if(c.spawn){
+      // Spawn new piece at step 1 (no immediate extra movement)
+      ensurePieceForSum(pl, sum);
+      setGame(finishPairActionAfterMove(newGame));
+      return;
+    }
+
+    // Activate if needed (within cap) and perform the directional move
+    if(c.willActivate && activeCount(pl) < 2){ c.pc.active = true; }
+    performMoveWithPush(c.pc, c.target, newGame);
+    setGame(finishPairActionAfterMove(newGame));
+  }
+
   function canMoveOnSum(pl,sum){
     const r=LANES.findIndex(x=>x.sum===sum); if(r<0) return false;
 
@@ -1377,6 +1490,19 @@ export default function App(){
 
     // Now proceed with movement logic
     const targets = getMoveTargets(pc);
+    // If a quick direction is pending, try to auto-apply it
+    if(newGame.quickMoveDir){
+      const desired = newGame.quickMoveDir === 'up' ? (pc.step + 1) : (pc.step - 1);
+      const t = targets.find(tg => tg.r === pc.r && tg.step === desired);
+      if(t){
+        performMoveWithPush(pc, t, newGame);
+        newGame.quickMoveDir = null;
+        setGame(finishPairActionAfterMove(newGame));
+        return;
+      }
+      // If the desired direction isn't available, fall through to normal destination chooser
+      newGame.quickMoveDir = null;
+    }
     if(targets.length === 0){
       // No movement possible (maybe just activated)
       setGame(finishPairActionAfterMove(newGame));
@@ -2253,13 +2379,7 @@ function setState(state, options = {}){
             >
               🎲 Roll
             </button>
-            <button
-              className="mobile-button"
-              onClick={useMove}
-              disabled={game.mode === 'gameOver' || !mpCanAct() || !(game.mode === 'pairChosen' && game.selectedPair && canMoveOnSum(pl, game.selectedPair.sum))}
-            >
-              ➡️ Move
-            </button>
+            {/* Legacy Move button hidden; use per-sum ↑/↓ controls instead */}
             <button
               className="mobile-button"
               onClick={useSwoop}
@@ -2342,23 +2462,41 @@ function setState(state, options = {}){
             <div className="mobile-dice-section">
               <div className="mobile-dice-container">
                 {game.rolled.d.map((v, i) => (
-                  <div key={i} className="mobile-die">
-                    {v}
-                  </div>
+                  <div key={i} className="mobile-die">{v}</div>
                 ))}
               </div>
               <div className="mobile-pairs-container">
-                {/* New: deduped, legality-aware options; fallback to legacy when missing */}
+                {/* Show options grouped by pairing; each row renders both sums with their own ↑/↓ */}
                 {game.rolled.pairings && computeRollOptions().map((opt, i) => {
                   const selected = !!(game.pendingAdvances && game.pendingAdvances.length>0 && game.selectedPair && opt.sums.includes(game.selectedPair.sum));
+                  const pl = game.players[game.current];
                   return (
-                    <div
-                      key={`${opt.type}:${opt.sums.join(',')}`}
-                      onClick={() => selectRollOption(opt)}
-                      className={`mobile-pair ${selected ? 'selected' : ''}`}
-                      title={opt.title || ''}
-                    >
-                      <div className="pair-sum">{opt.label}</div>
+                    <div key={`${opt.type}:${opt.sums.join(',')}`} className={`mobile-pair ${selected ? 'selected' : ''}`} title={opt.title || ''}>
+                      <div style={{ display:'flex', gap:12, alignItems:'center', width:'100%', justifyContent:'space-between' }}>
+                        {opt.sums.map((sum, idx) => {
+                          const upEnabled = directionalCandidatesForSum(pl, sum, 'up').length > 0;
+                          const downEnabled = directionalCandidatesForSum(pl, sum, 'down').length > 0;
+                          return (
+                            <div key={`sumcol-${sum}-${idx}`} style={{ display:'flex', alignItems:'center', gap:8 }}>
+                              <div className="pair-sum">{sum}</div>
+                              <div className="pair-actions" style={{ display:'flex', gap:6 }}>
+                                <button
+                                  className="mobile-button primary"
+                                  disabled={!upEnabled || !mpCanAct()}
+                                  onClick={() => quickMove(sum, 'up')}
+                                  title={`Move ${sum} Up`}
+                                >↑</button>
+                                <button
+                                  className="mobile-button ghost"
+                                  disabled={!downEnabled || !mpCanAct()}
+                                  onClick={() => quickMove(sum, 'down')}
+                                  title={`Move ${sum} Down`}
+                                >↓</button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                       {opt.reason && (
                         <div className="pair-reason">{opt.reason}</div>
                       )}
@@ -2366,11 +2504,7 @@ function setState(state, options = {}){
                   );
                 })}
                 {!game.rolled.pairings && game.rolled.pairs && game.rolled.pairs.map((p, i) => (
-                  <div
-                    key={i}
-                    onClick={() => showToast('Legacy save: roll once to continue.')}
-                    className={`mobile-pair`}
-                  >
+                  <div key={i} className={`mobile-pair`} onClick={() => showToast('Legacy save: roll once to continue.') }>
                     <div className="pair-sum">{p.sum}</div>
                     <div className="pair-calc">{game.rolled.d[p.i]}+{game.rolled.d[p.j]}</div>
                   </div>
@@ -2385,7 +2519,7 @@ function setState(state, options = {}){
             <div className="legend-items">
               <div>🧺 Basket • 🟡 Safe • 🟥 Danger</div>
               <div>🐒🐵 Monkeys • 🕊️🦅 Seagulls</div>
-              <div>Roll 4 dice → Choose a pairing → Advance both if possible</div>
+              <div>Roll 4 dice → Tap a sum’s ↑/↓ to move (second move auto-forced when applicable)</div>
             </div>
           </div>
 
