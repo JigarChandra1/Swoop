@@ -818,6 +818,16 @@ export default function App(){
     return Array.from(set).sort((a,b)=>a-b);
   }
 
+  // Build the rows to render in the UI. When a pair has been chosen and a first
+  // move has been taken, restrict to the forced second sum only (no other options).
+  function computeUiMoveRows(){
+    if(!game.rolled || !game.rolled.pairings) return [];
+    if(game.mode === 'pairChosen' && game.pendingAdvances && game.selectedPair){
+      return [{ type: 'single', sums: [game.selectedPair.sum], title: 'Forced move' }];
+    }
+    return computeRollOptions();
+  }
+
   // Prefer a double option when available; otherwise fall back to single option for the sum
   function pickAdvanceSequenceForSum(sum){
     if(!game.rolled || !game.rolled.pairings) return null;
@@ -2467,7 +2477,7 @@ function setState(state, options = {}){
               </div>
               <div className="mobile-pairs-container">
                 {/* Show options grouped by pairing; each row renders both sums with their own ↑/↓ */}
-                {game.rolled.pairings && computeRollOptions().map((opt, i) => {
+                {game.rolled.pairings && computeUiMoveRows().map((opt, i) => {
                   const selected = !!(game.pendingAdvances && game.pendingAdvances.length>0 && game.selectedPair && opt.sums.includes(game.selectedPair.sum));
                   const pl = game.players[game.current];
                   return (
