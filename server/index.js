@@ -2,6 +2,9 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const { createStore } = require('./storage');
+let WebSocketServer;
+try { WebSocketServer = require('ws').Server; } catch (_) { WebSocketServer = null; }
+const socketsByRoom = new Map(); // code -> Set<WebSocket>
 
 // Runtime cache with optional persistence (KV/file/memory)
 // roomsCache: code -> { code, createdAt, lastActivity, version, state, players: Map, sseClients: Set }
@@ -154,6 +157,16 @@ async function bumpVersion(room) {
   for (const res of room.sseClients) {
     try { res.write(payload); } catch (_) {}
   }
+  // Broadcast to WebSocket listeners
+  try {
+    const set = socketsByRoom.get(room.code);
+    if (set) {
+      const msg = JSON.stringify({ type: 'sync', code: room.code, version: room.version });
+      for (const ws of set) {
+        try { if (ws.readyState === 1 /* OPEN */) ws.send(msg); } catch(_){}
+      }
+    }
+  } catch(_){}
 }
 
 // --- Routes ---
@@ -318,7 +331,39 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 if (require.main === module) {
-  app.listen(PORT, () => {
+  const http = require('http');
+  const server = http.createServer(app);
+
+  // --- WebSocket upgrade (local/long-lived servers only) ---
+  const socketsByRoom = new Map(); // code -> Set<WebSocket>
+  if (WebSocketServer) {
+    const wss = new WebSocketServer({ noServer: true });
+    function attachSocket(ws, code) {
+      let set = socketsByRoom.get(code);
+      if (!set) { set = new Set(); socketsByRoom.set(code, set); }
+      set.add(ws);
+      ws.on('close', () => { set.delete(ws); if (set.size === 0) socketsByRoom.delete(code); });
+      // Send initial version ping
+      (async () => {
+        const r = await getRoom(code).catch(()=>null);
+        const version = r?.version || 1;
+        try { ws.send(JSON.stringify({ type: 'sync', code, version })); } catch(_){}
+      })();
+    }
+    server.on('upgrade', async (req, socket, head) => {
+      try {
+        const url = new URL(req.url, `http://${req.headers.host}`);
+        const m = url.pathname.match(/^\/api\/rooms\/([0-9]{6})\/socket$/);
+        if (!m) return socket.destroy();
+        const code = m[1];
+        const room = await getRoom(code);
+        if (!room) return socket.destroy();
+        wss.handleUpgrade(req, socket, head, (ws) => attachSocket(ws, code));
+      } catch (_) { try { socket.destroy(); } catch(_){} }
+    });
+  }
+
+  server.listen(PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`[swoop-backend] listening on http://localhost:${PORT}`);
   });

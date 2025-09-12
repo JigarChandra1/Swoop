@@ -32,12 +32,16 @@ Allow CORS by origin with `CORS_ORIGIN`, otherwise `*`.
   - Player names are derived from seat assignments; icons are preserved server‑side.
   - Returns `{ ok: true, version }`, or `409 { error: 'version_conflict'|'not_your_turn', version, state }`.
 
-- GET `/api/rooms/:code/stream`
-  - Server‑Sent Events stream that emits `sync` events with `{ code, version }` when state changes.
+WebSocket
+
+- Connect to `ws(s):///api/rooms/:code/socket` to receive realtime `{ type:'sync', code, version }` messages on state changes.
+  - Local/dev server supports WebSockets.
+  - On Vercel Node Functions, native WebSockets are not supported; the client automatically polls every ~2s.
 
 Notes:
 - The server is the source of truth for the game snapshot, but rule enforcement is intentionally minimal for now.
 - Version is bumped for state updates and for seat/name changes when players join.
+- Realtime uses WebSockets locally; on Vercel, the client falls back to polling.
 - Storage: by default the server keeps room state in memory; when available it persists to a store (see below).
 
 ### Frontend helper (optional)

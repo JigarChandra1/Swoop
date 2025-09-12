@@ -51,9 +51,21 @@ export async function pushState(code, { playerId, token, baseVersion, state }) {
   return j('POST', `/api/rooms/${code}/state`, { playerId, token, baseVersion, state });
 }
 
+function wsBase() {
+  if (typeof window !== 'undefined' && !BASE_URL) {
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProto}//${window.location.host}`;
+  }
+  try {
+    const u = new URL(BASE_URL);
+    const wsProto = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${wsProto}//${u.host}`;
+  } catch(_) { return null; }
+}
+
 export function subscribe(code, onSync) {
   let closed = false;
-  let stopSSE = null;
+  let stopWS = null;
   let stopPoll = null;
 
   function startPolling() {
@@ -70,25 +82,24 @@ export function subscribe(code, onSync) {
     return () => { if (timer) clearTimeout(timer); };
   }
 
-  // Always run a light polling loop as a safety net (handles serverless/SSE limits)
+  // Always run a light polling loop as a safety net (handles serverless limits)
   stopPoll = startPolling();
 
-  // Try EventSource in parallel (best-effort)
+  // Try WebSocket in parallel (preferred)
   try {
-    const url = (BASE_URL ? BASE_URL : '') + `/api/rooms/${code}/stream`;
-    const ev = new EventSource(url, { withCredentials: false });
-    const handler = (e) => {
-      try { const data = JSON.parse(e.data); onSync?.(data); } catch (_) {}
-    };
-    ev.addEventListener('sync', handler);
-    stopSSE = () => { try { ev.close(); } catch (_) {} };
-  } catch (_) {
-    // Ignore — polling is already running
-  }
+    const base = wsBase();
+    if (base) {
+      const ws = new WebSocket(`${base}/api/rooms/${code}/socket`);
+      ws.onmessage = (e) => {
+        try { const data = JSON.parse(e.data); if (data && data.type === 'sync') onSync?.(data); } catch (_) {}
+      };
+      stopWS = () => { try { ws.close(); } catch(_){} };
+    }
+  } catch(_) { /* ignore */ }
 
   return () => {
     closed = true;
-    if (typeof stopSSE === 'function') stopSSE();
+    if (typeof stopWS === 'function') stopWS();
     if (typeof stopPoll === 'function') stopPoll();
   };
 }
