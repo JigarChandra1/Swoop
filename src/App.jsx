@@ -877,7 +877,33 @@ export default function App(){
     return out;
   }
 
-  // Direct, single-click move for a sum and direction (up/down). Sets pairing context and executes the move.
+  // Candidate generator for direct Sideways actions on a given sum (left/right from top step)
+  function sidewaysCandidatesForSum(pl, sum, side){
+    const r = LANES.findIndex(x => x.sum === sum);
+    if (r < 0) return [];
+    const out = [];
+    const piecesOnRoute = pl.pieces.filter(p => p.r === r);
+    const dr = side === 'left' ? -1 : +1;
+    const r2 = r + dr;
+    if (r2 < 0 || r2 >= LANES.length) return out; // no adjacent lane
+
+    for (const pc of piecesOnRoute){
+      const L = LANES[pc.r].L;
+      // Must be on top step to move sideways
+      if (pc.step !== L) continue;
+      // Respect activation cap if piece is inactive
+      if (!pc.active && activeCount(pl) >= 2) continue;
+      const targets = getMoveTargets(pc);
+      const targetStep = LANES[r2].L;
+      const t = targets.find(tg => tg.r === r2 && tg.step === targetStep);
+      if (t){
+        out.push({ pc, target: t, willActivate: !pc.active });
+      }
+    }
+    return out;
+  }
+
+  // Direct, single-click move for a sum and direction (up/down/left/right). Sets pairing context and executes the move.
   function quickMove(sum, dir){
     if(game.mode !== 'rolled' && game.mode !== 'pairChosen') return;
     const seq = pickAdvanceSequenceForSum(sum);
@@ -893,11 +919,19 @@ export default function App(){
       : `${newGame.players[newGame.current].name}: Only ${seq[0]} is possible — Move.`;
 
     const pl = newGame.players[newGame.current];
-    const cands = directionalCandidatesForSum(pl, sum, dir);
+    let cands = [];
+    if (dir === 'up' || dir === 'down') {
+      cands = directionalCandidatesForSum(pl, sum, dir);
+    } else if (dir === 'left' || dir === 'right') {
+      cands = sidewaysCandidatesForSum(pl, sum, dir);
+    }
     if(cands.length === 0){
       // Keep the selection (so player can pick a different action) but inform about direction unavailability
       setGame(newGame);
-      showToast(`No ${dir === 'up' ? 'Up' : 'Down'} move on ${sum}.`);
+      let label = 'Sideways';
+      if (dir === 'up') label = 'Up'; else if (dir === 'down') label = 'Down';
+      else if (dir === 'left') label = 'Left'; else if (dir === 'right') label = 'Right';
+      showToast(`No ${label} move on ${sum}.`);
       return;
     }
 
@@ -908,7 +942,8 @@ export default function App(){
       newGame.pieceChoices = nonSpawn.map(c => c.pc);
       newGame.selectedSum = sum;
       newGame.quickMoveDir = dir; // remember requested direction
-      newGame.message = `${pl.name}: Choose piece to move ${dir === 'up' ? 'Up' : 'Down'}.`;
+      const dirLabel = (dir === 'up') ? 'Up' : (dir === 'down') ? 'Down' : (dir === 'left') ? 'Left' : 'Right';
+      newGame.message = `${pl.name}: Choose piece to move ${dirLabel}.`;
       setGame(newGame);
       return;
     }
@@ -922,7 +957,7 @@ export default function App(){
       return;
     }
 
-    // Activate if needed (within cap) and perform the directional move
+    // Activate if needed (within cap) and perform the move
     if(c.willActivate && activeCount(pl) < 2){ c.pc.active = true; }
     performMoveWithPush(c.pc, c.target, newGame);
     setGame(finishPairActionAfterMove(newGame));
@@ -1502,10 +1537,20 @@ export default function App(){
     const targets = getMoveTargets(pc);
     // If a quick direction is pending, try to auto-apply it
     if(newGame.quickMoveDir){
-      const desired = newGame.quickMoveDir === 'up' ? (pc.step + 1) : (pc.step - 1);
-      const t = targets.find(tg => tg.r === pc.r && tg.step === desired);
-      if(t){
-        performMoveWithPush(pc, t, newGame);
+      let targetMatch = null;
+      if (newGame.quickMoveDir === 'up' || newGame.quickMoveDir === 'down'){
+        const desired = newGame.quickMoveDir === 'up' ? (pc.step + 1) : (pc.step - 1);
+        targetMatch = targets.find(tg => tg.r === pc.r && tg.step === desired);
+      } else if (newGame.quickMoveDir === 'left' || newGame.quickMoveDir === 'right'){
+        const dr = newGame.quickMoveDir === 'left' ? -1 : +1;
+        const r2 = pc.r + dr;
+        if (r2 >= 0 && r2 < LANES.length){
+          const step2 = LANES[r2].L;
+          targetMatch = targets.find(tg => tg.r === r2 && tg.step === step2);
+        }
+      }
+      if(targetMatch){
+        performMoveWithPush(pc, targetMatch, newGame);
         newGame.quickMoveDir = null;
         setGame(finishPairActionAfterMove(newGame));
         return;
@@ -2486,6 +2531,8 @@ function setState(state, options = {}){
                         {opt.sums.map((sum, idx) => {
                           const upEnabled = directionalCandidatesForSum(pl, sum, 'up').length > 0;
                           const downEnabled = directionalCandidatesForSum(pl, sum, 'down').length > 0;
+                          const leftEnabled = sidewaysCandidatesForSum(pl, sum, 'left').length > 0;
+                          const rightEnabled = sidewaysCandidatesForSum(pl, sum, 'right').length > 0;
                           return (
                             <div key={`sumcol-${sum}-${idx}`} style={{ display:'flex', alignItems:'center', gap:8 }}>
                               <div className="pair-sum">{sum}</div>
@@ -2502,6 +2549,23 @@ function setState(state, options = {}){
                                   onClick={() => quickMove(sum, 'down')}
                                   title={`Move ${sum} Down`}
                                 >↓</button>
+                                {/* Sideways arrows appear only when applicable (top-step free swoop). */}
+                                {leftEnabled && (
+                                  <button
+                                    className="mobile-button ghost"
+                                    disabled={!mpCanAct()}
+                                    onClick={() => quickMove(sum, 'left')}
+                                    title={`Move ${sum} Sideways (Left)`}
+                                  >←</button>
+                                )}
+                                {rightEnabled && (
+                                  <button
+                                    className="mobile-button ghost"
+                                    disabled={!mpCanAct()}
+                                    onClick={() => quickMove(sum, 'right')}
+                                    title={`Move ${sum} Sideways (Right)`}
+                                  >→</button>
+                                )}
                               </div>
                             </div>
                           );
