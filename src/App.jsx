@@ -1,5 +1,6 @@
 import React from 'react';
 import { createRoom as mpCreateRoom, joinRoom as mpJoinRoom, getState as mpGetState, pushState as mpPushState, subscribe as mpSubscribe, saveCreds as mpSaveCreds, loadCreds as mpLoadCreds } from './net/multiplayer.js';
+// Sound effects removed
 
 const LANES = [
   {sum:2, L:3, basket:true},
@@ -149,6 +150,8 @@ export default function App(){
   const mpPendingRemoteRef = React.useRef(null); // { state, version }
   const gameModeRef = React.useRef('preroll');
   React.useEffect(() => { gameModeRef.current = game.mode; }, [game.mode]);
+
+  // Audio initialization removed
 
   function mpCanAct() {
     if (!mp.connected) return true;
@@ -1424,9 +1427,7 @@ export default function App(){
     const actualPiece = pl.pieces.find(p => p.r === pc.r && p.step === pc.step);
 
     if(actualPiece){
-      actualPiece.r = target.r;
-      actualPiece.step = target.step;
-      afterMovePickup(actualPiece, newGame);
+      performMoveWithPush(actualPiece, target, newGame);
       showToast(`Free swoop to lane ${LANES[target.r].sum}!`);
     }
 
@@ -2425,7 +2426,8 @@ function setState(state, options = {}){
 
         {/* Right Side - Controls and Info */}
         <div className="mobile-controls-container">
-          {/* Primary Action Buttons */}
+          {/* Primary Action Buttons (hidden for non-acting clients) */}
+          {mpCanAct() && (
           <div className="mobile-primary-controls">
             <button
               className={`mobile-button primary ${game.mode === 'preroll' ? 'active' : ''}`}
@@ -2474,9 +2476,10 @@ function setState(state, options = {}){
               })()}
             </button>
           </div>
+          )}
 
           {/* Tailwind Choice Buttons */}
-          {game.mode === 'tailwindTopStepChoice' && game.tailwindOptions && (
+          {mpCanAct() && game.mode === 'tailwindTopStepChoice' && game.tailwindOptions && (
             <div className="mobile-tailwind-choice">
               <div className="mobile-choice-title">Choose action for top step piece:</div>
               <div className="mobile-choice-buttons">
@@ -2501,7 +2504,7 @@ function setState(state, options = {}){
           )}
 
           {/* Transfer Cancel Button */}
-          {(game.mode === 'chooseTransferSource' || game.mode === 'chooseTransferTarget') && (
+          {mpCanAct() && (game.mode === 'chooseTransferSource' || game.mode === 'chooseTransferTarget') && (
             <div className="mobile-transfer-cancel">
               <button
                 className="mobile-button"
@@ -2536,6 +2539,7 @@ function setState(state, options = {}){
                           return (
                             <div key={`sumcol-${sum}-${idx}`} style={{ display:'flex', alignItems:'center', gap:8 }}>
                               <div className="pair-sum">{sum}</div>
+                              {mpCanAct() && (
                               <div className="pair-actions" style={{ display:'flex', gap:6 }}>
                                 <button
                                   className="mobile-button primary"
@@ -2567,6 +2571,7 @@ function setState(state, options = {}){
                                   >→</button>
                                 )}
                               </div>
+                              )}
                             </div>
                           );
                         })}
