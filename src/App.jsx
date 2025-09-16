@@ -137,6 +137,10 @@ export default function App(){
   const [toast, setToast] = React.useState(null);
   const [showLoadModal, setShowLoadModal] = React.useState(false);
   const [loadText, setLoadText] = React.useState('');
+  // AAA skin support: grid + tile refs for connector overlay
+  const gridRef = React.useRef(null);
+  const tileRefs = React.useRef({});
+  const [roomVisible, setRoomVisible] = React.useState(false);
 
   // Multiplayer state
   const [mp, setMp] = React.useState({ connected:false, code:'', version:null, playerId:null, token:null, side:null, joining:false, error:null });
@@ -2266,6 +2270,9 @@ function setState(state, options = {}){
         <div
           key={`${r}-${c}`}
           className={classes}
+          data-r={r}
+          data-step={step}
+          ref={(el) => { if (el) { tileRefs.current[`${r}-${step}`] = el; } }}
           onClick={highlighted ? () => handleTileClick(r, step, occ) : undefined}
         >
           {/* Step number */}
@@ -2276,7 +2283,7 @@ function setState(state, options = {}){
             <div className="swoop-basket">🧺</div>
           )}
           {occ && (
-            <div className={`swoop-piece ${occ.pi === game.current && occ.pc.active ? 'active' : ''} ${occ.pc.carrying ? 'carry' : ''}`}>
+            <div className={`swoop-piece ${occ.pi === game.current && occ.pc.active ? 'active' : ''} ${occ.pc.carrying ? 'carry' : ''}`} data-player={occ.pi}>
               <span>
                 {occ.pi === game.current && occ.pc.active
                   ? game.players[occ.pi].activeIcon
@@ -2307,6 +2314,9 @@ function setState(state, options = {}){
         <div
           key={`${r}-${c}`}
           className={classes}
+          data-r={r}
+          data-step={step}
+          ref={(el) => { if (el) { tileRefs.current[`${r}-${step}`] = el; } }}
           onClick={isHighlighted ? () => handleTileClick(r, step, occ) : undefined}
         >
           {/* Step number */}
@@ -2314,7 +2324,7 @@ function setState(state, options = {}){
 
           {/* Piece if present */}
           {occ && (
-            <div className={`swoop-piece ${occ.pi === game.current && occ.pc.active ? 'active' : ''} ${occ.pc.carrying ? 'carry' : ''}`}>
+            <div className={`swoop-piece ${occ.pi === game.current && occ.pc.active ? 'active' : ''} ${occ.pc.carrying ? 'carry' : ''}`} data-player={occ.pi}>
               <span>
                 {occ.pi === game.current && occ.pc.active
                   ? game.players[occ.pi].activeIcon
@@ -2347,6 +2357,174 @@ function setState(state, options = {}){
   }
 
   const pl=game.players[game.current];
+
+  // AAA Connectors overlay using measured tile centers
+  function ConnectorsOverlay() {
+    const [overlay, setOverlay] = React.useState({ width: 0, height: 0, segments: [] });
+
+    React.useEffect(() => {
+      function compute() {
+        const container = gridRef.current;
+        if (!container) {
+          setOverlay({ width: 0, height: 0, segments: [] });
+          return;
+        }
+        const contRect = container.getBoundingClientRect();
+        const infoCache = new Map();
+        const tileInfo = (r, s) => {
+          const key = `${r}-${s}`;
+          if (infoCache.has(key)) return infoCache.get(key);
+          const el = tileRefs.current[key];
+          if (!el) return null;
+          const b = el.getBoundingClientRect();
+          const info = {
+            cx: b.left + b.width / 2 - contRect.left,
+            cy: b.top + b.height / 2 - contRect.top,
+            rx: b.width / 2,
+            ry: b.height / 2
+          };
+          infoCache.set(key, info);
+          return info;
+        };
+        const segs = [];
+        for (let r = 0; r < ROWS; r++) {
+          const L = LANES[r].L;
+          for (let s = 1; s <= L; s++) {
+            if (!tileExistsAt(r, s)) continue;
+            // Draw to both neighbors (r-1 and r+1) for a complete graph
+            for (const dr of [-1, +1]) {
+              const r2 = r + dr;
+              if (r2 < 0 || r2 >= ROWS) continue;
+              let s2;
+              if (s === L) {
+                s2 = LANES[r2].L;
+              } else {
+                const space = mapStepToGrid(r, s);
+                s2 = stepForSpace(r2, space);
+              }
+              if (s2 && tileExistsAt(r2, s2)) {
+                const a = tileInfo(r, s);
+                const b = tileInfo(r2, s2);
+                if (a && b) {
+                  const dx = b.cx - a.cx;
+                  const dy = b.cy - a.cy;
+                  const dist = Math.hypot(dx, dy) || 1;
+                  const normX = dx / dist;
+                  const normY = dy / dist;
+                  const baseA = Math.min(a.rx, a.ry);
+                  const baseB = Math.min(b.rx, b.ry);
+                  let insetA = baseA + Math.min(baseA * 0.45, 14);
+                  let insetB = baseB + Math.min(baseB * 0.45, 14);
+                  const maxTotal = Math.max(dist - 6, 0);
+                  const desiredTotal = insetA + insetB;
+                  if (desiredTotal > 0 && maxTotal < desiredTotal) {
+                    const scale = maxTotal / desiredTotal;
+                    insetA *= scale;
+                    insetB *= scale;
+                  }
+                  const startX = a.cx + normX * insetA;
+                  const startY = a.cy + normY * insetA;
+                  const endX = b.cx - normX * insetB;
+                  const endY = b.cy - normY * insetB;
+                  segs.push({ x1: startX, y1: startY, x2: endX, y2: endY, key: `${r}-${s}->${r2}-${s2}` });
+                }
+              }
+            }
+          }
+        }
+        setOverlay({ width: contRect.width, height: contRect.height, segments: segs });
+      }
+      // Compute after layout paints to avoid partial refs on desktop
+      const raf1 = requestAnimationFrame(() => {
+        const raf2 = requestAnimationFrame(compute);
+        // store to cleanup
+        (compute)._raf2 = raf2;
+      });
+      window.addEventListener('resize', compute);
+      return () => {
+        window.removeEventListener('resize', compute);
+        cancelAnimationFrame(raf1);
+        if ((compute)._raf2) cancelAnimationFrame((compute)._raf2);
+      };
+      // Recompute when game state changes (safe, cheap)
+    }, [game]);
+
+    const width = Math.max(overlay.width, 1);
+    const height = Math.max(overlay.height, 1);
+
+    return (
+      <svg
+        className="aaa-connectors"
+        style={{ width: '100%', height: '100%' }}
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+      >
+        {overlay.segments.map(l => (
+          <line key={l.key} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} />
+        ))}
+      </svg>
+    );
+  }
+
+  // AAA lane numbers next to the final column
+  function FinalLaneLabels() {
+    const [labels, setLabels] = React.useState([]);
+
+    React.useEffect(() => {
+      function compute() {
+        const container = gridRef.current;
+        if (!container) {
+          setLabels([]);
+          return;
+        }
+        const contRect = container.getBoundingClientRect();
+        const items = [];
+        for (let r = 0; r < ROWS; r++) {
+          const finalStep = LANES[r].L;
+          const el = tileRefs.current[`${r}-${finalStep}`];
+          if (!el) continue;
+          const rect = el.getBoundingClientRect();
+          const offset = Math.min(rect.width * 0.3, 28);
+          const rawLeft = rect.right - contRect.left + offset;
+          const cappedLeft = Math.min(rawLeft, contRect.width - 44);
+          const left = Math.max(cappedLeft, rect.right - contRect.left + 6);
+          items.push({
+            key: `final-${r}`,
+            left,
+            top: rect.top + rect.height / 2 - contRect.top,
+            sum: LANES[r].sum
+          });
+        }
+        setLabels(items);
+      }
+      const raf1 = requestAnimationFrame(() => {
+        const raf2 = requestAnimationFrame(compute);
+        (compute)._raf2 = raf2;
+      });
+      window.addEventListener('resize', compute);
+      return () => {
+        window.removeEventListener('resize', compute);
+        cancelAnimationFrame(raf1);
+        if ((compute)._raf2) cancelAnimationFrame((compute)._raf2);
+      };
+    }, [game]);
+
+    if (!labels.length) return null;
+
+    return (
+      <div className="aaa-final-lane-labels">
+        {labels.map(label => (
+          <div
+            key={label.key}
+            className="aaa-final-lane-label"
+            style={{ left: label.left, top: label.top }}
+          >
+            {label.sum}
+          </div>
+        ))}
+      </div>
+    );
+  }
 
   return (
     <div className="mobile-game-container" style={{background: 'var(--bg)'}}>
@@ -2409,6 +2587,13 @@ function setState(state, options = {}){
         {/* Left Side - Game Board */}
         <div className="mobile-board-container">
           <div className="swoop-board mobile-board">
+            {/* AAA connectors and overlays */}
+            {typeof document !== 'undefined' && document.body.classList.contains('skin-aaa') && (
+              <>
+                <ConnectorsOverlay />
+                <FinalLaneLabels />
+              </>
+            )}
             {/* Game Board Grid */}
             <div
               className="mobile-grid"
@@ -2416,6 +2601,7 @@ function setState(state, options = {}){
                 gridTemplateColumns: `repeat(${COLS}, 1fr)`,
                 gridAutoRows: '1fr'
               }}
+              ref={gridRef}
             >
               {Array.from({ length: ROWS }, (_, r) =>
                 Array.from({ length: COLS }, (_, c) => renderGridCell(r, c))
@@ -2429,13 +2615,15 @@ function setState(state, options = {}){
           {/* Primary Action Buttons (hidden for non-acting clients) */}
           {mpCanAct() && (
           <div className="mobile-primary-controls">
-            <button
-              className={`mobile-button primary ${game.mode === 'preroll' ? 'active' : ''}`}
-              onClick={roll}
-              disabled={game.mode !== 'preroll' || game.mode === 'gameOver' || !mpCanAct()}
-            >
-              🎲 Roll
-            </button>
+            {game.mode === 'preroll' && (
+              <button
+                className="mobile-button primary active"
+                onClick={roll}
+                disabled={game.mode !== 'preroll' || game.mode === 'gameOver' || !mpCanAct()}
+              >
+                🎲 Roll
+              </button>
+            )}
             {/* Legacy Move button hidden; use per-sum ↑/↓ controls instead */}
             <button
               className="mobile-button"
@@ -2592,13 +2780,22 @@ function setState(state, options = {}){
             </div>
           )}
 
-          {/* Mobile Legend */}
-          <div className="mobile-legend">
-            <div className="legend-title">Quick Guide:</div>
-            <div className="legend-items">
-              <div>🧺 Basket • 🟡 Safe • 🟥 Danger</div>
-              <div>🐒🐵 Monkeys • 🕊️🦅 Seagulls</div>
-              <div>Roll 4 dice → Tap a sum’s ↑/↓ to move (second move auto-forced when applicable)</div>
+          {/* AAA: Status card replacing Quick Guide */}
+          <div className="aaa-status">
+            <div className="aaa-status-row">
+              <div><strong>Player:</strong> {game.players[game.current].name}</div>
+              <div><strong>✈️</strong> {game.players[game.current].swoopTokens || 0}</div>
+            </div>
+            <div className="aaa-status-row small">{game.message}</div>
+            <div className="aaa-status-row">
+              <div>🐒 {game.players[0].score} • ✈️ {game.players[0].swoopTokens||0}</div>
+              <div>🕊️ {game.players[1].score} • ✈️ {game.players[1].swoopTokens||0}</div>
+            </div>
+            <div className="aaa-status-row">
+              <button className="mobile-button-small" onClick={() => {
+                const vis = !roomVisible; setRoomVisible(vis);
+                try { document.body.classList.toggle('aaa-room-visible', vis); } catch(_){}
+              }}>🔗 Room</button>
             </div>
           </div>
 

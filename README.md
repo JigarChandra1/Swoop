@@ -179,6 +179,26 @@ Notes and future considerations for bots (non-reactive for now):
 - Managing active-piece cap (max 2) strategically across lanes.
 - Endgame targeting when one point away from victory.
 
+## AAA Board Skin (visuals‑only)
+
+An optional AAA‑style skin is available for the main board (no rule changes; presentation only). It adds:
+
+- Fullscreen river background and dam/beach flourishes
+- Re‑skinned tiles (safe, checkpoint, danger/whirlpool)
+- Token‑style monkey/seagull pieces and basket icon
+- Subtle connectors between tiles that can be swooped across
+- Compact overlay HUD; multiplayer bar hidden by default
+
+Enable it by appending `?skin=aaa` to the URL, e.g.:
+
+```
+http://localhost:5173/?skin=aaa
+```
+
+The choice is stored in `localStorage` under `SWOOP_SKIN`; remove it or load without the query to revert.
+
+Asset note: The skin references images in `RnD/` for now. For production, copy/optimize them into `public/assets/aaa/` and adjust URLs if needed.
+
 
 
 ## Geometric Board Layout (dev notes)
