@@ -10,9 +10,28 @@ body.skin-aaa {
   background: #0b3b49;
 }
 
-/* Hide multiplayer chrome by default in AAA mode */
-body.skin-aaa .mobile-game-container > div:first-child {
-  display: none !important;
+.aaa-intro-cover {
+  position: fixed;
+  inset: 0;
+  background: #0b3b49;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: min(4vw, 4vh);
+  z-index: 999;
+  cursor: pointer;
+}
+.aaa-intro-cover img {
+  max-width: min(96vw, 1400px);
+  max-height: 96vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.45);
+}
+body.skin-aaa .aaa-intro-cover {
+  background: #0b3b49;
 }
 
 /* Full bleed board */
@@ -27,7 +46,7 @@ body.skin-aaa .mobile-board-container {
 }
 body.skin-aaa .mobile-board {
   position: relative;
-  background: #0b3b49 url('/RnD/bg2.png') center/cover no-repeat;
+  background: #0b3b49 url('/RnD/bg3.png') center/cover no-repeat;
   border: none;
   border-radius: 0;
   box-shadow: none;
@@ -325,8 +344,8 @@ body.skin-aaa .aaa-status .aaa-status-row {
 body.skin-aaa .aaa-status .aaa-status-row.small { opacity: 0.8; font-size: 11px; }
 
 /* Room toggle shows the multiplayer bar */
-body.skin-aaa .mobile-game-container > div:first-child { display: none !important; }
-body.skin-aaa.aaa-room-visible .mobile-game-container > div:first-child {
+body.skin-aaa .aaa-mp-bar { display: none !important; }
+body.skin-aaa.aaa-room-visible .aaa-mp-bar {
   display: flex !important; position: absolute; top: 8px; left: 8px; right: auto; z-index: 40;
   background: rgba(17,17,17,0.92); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; padding: 6px;
 }

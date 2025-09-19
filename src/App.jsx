@@ -137,6 +137,7 @@ export default function App(){
   const [toast, setToast] = React.useState(null);
   const [showLoadModal, setShowLoadModal] = React.useState(false);
   const [loadText, setLoadText] = React.useState('');
+  const [showCover, setShowCover] = React.useState(true);
   // AAA skin support: grid + tile refs for connector overlay
   const gridRef = React.useRef(null);
   const tileRefs = React.useRef({});
@@ -2528,8 +2529,26 @@ function setState(state, options = {}){
 
   return (
     <div className="mobile-game-container" style={{background: 'var(--bg)'}}>
+      {showCover && (
+        <div
+          className="aaa-intro-cover"
+          onClick={() => setShowCover(false)}
+          onTouchStart={() => setShowCover(false)}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setShowCover(false);
+            }
+          }}
+          aria-label="Enter game"
+        >
+          <img src="/RnD/cover2.png" alt="Swoop cover" aria-hidden="true" />
+        </div>
+      )}
       {/* Multiplayer Controls */}
-      <div style={{ display:'flex', gap:8, alignItems:'center', padding:'6px 8px', background:'#111', color:'#eee', flexWrap:'wrap' }}>
+      <div className="aaa-mp-bar" style={{ display:'flex', gap:8, alignItems:'center', padding:'6px 8px', background:'#111', color:'#eee', flexWrap:'wrap' }}>
         {!mp.connected ? (
           <>
             <span style={{opacity:0.85}}>Multiplayer:</span>
