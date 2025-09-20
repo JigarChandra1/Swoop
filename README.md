@@ -171,8 +171,10 @@ npm run simulate -- --rounds=1000 --target=5 --seed=42
 ```
 
 Bot strategies:
-- Bot 1: Prefers highest odd sums (11 > 9 > 7 > 5 > 3), then highest overall; banks when it delivered in the turn or after ~3 actions.
-- Bot 2: Mixed; tends to favor even/high sums for baskets about half the time, otherwise highest sums; banks if delivered, after ~4 actions, or occasionally at random.
+- `aggressive`: Prefers highest odd sums (11 > 9 > 7 > 5 > 3), then highest overall; banks when it delivered in the turn or after ~3 actions.
+- `balanced`: Mixed; tends to favor even/high sums for baskets about half the time, otherwise highest sums; banks if delivered, after ~4 actions, or occasionally at random.
+- `conservative`: Prioritises safe checkpoint play, banking early when multiple lanes are exposed.
+- `pro`: League-ready bot using expectimax search, stochastic bust modelling, and a rich heuristic evaluator (tokens, pushes, deterrents, deliveries). It spends tokens tactically, samples future rolls before banking, and evaluates multi-step move plans.
 
 Notes and future considerations for bots (non-reactive for now):
 - Adaptive banking by risk of bust and deterrent exposure.
