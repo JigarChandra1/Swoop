@@ -1,14 +1,14 @@
 SWOOP — Rulebook (Print & Play / Pass & Play)
-A 2‑player, push‑your‑luck race about Monkeys and Seagulls stealing baskets and sprinting home — now with shared lanes, push chains, and token‑based Swoops.
+A 2–4 player, push-your-luck race about Monkeys, Seagulls, Crabs, and Turtles stealing baskets and sprinting home — now with shared lanes, push chains, and token-based Swoops.
 1) Summary
-Players: 2 (Monkeys vs Seagulls)
+Players: 2–4 (Monkeys • Seagulls • Crabs • Turtles)
 Goal: Deliver baskets to your shore. First to the agreed score wins (recommended 5).
 Core Loop: Roll 4d6 → choose a pair (up to two disjoint pairs per roll) → Move. You may also spend Swoop tokens to make a sideways jump. Push your luck until you Bank, or you Bust.
 2) Components
 Board showing 11 lanes labeled 2–12 converging at the center. Lanes are shared by both players.
 Baskets sit at the center tops of even lanes.
 Per player: 5 pieces (max 5 on the board at once).
-Per player: Swoop tokens (first player starts with 0; second player starts with 1).
+Swoop tokens: only the final seat begins with 1 token; all others start at 0. Tokens are capped at 2 per player.
 4 six‑sided dice.
 3) Board Anatomy
 Lanes are different lengths. Steps count from each shore toward the center (step 1 is the shore; the highest step L is just below the center).
@@ -36,7 +36,7 @@ Theme: Checkpoints are safe resting spots; Deterrents are hazards you only suffe
 Place the board between players with Monkeys on the left shore and Seagulls on the right shore (both approach the center).
 Put basket icons at the center of all even lanes (2/4/6/8/10/12).
 Each player takes 5 pieces; all off‑board.
-Give Swoop tokens: first player 0; second player 1.
+Give Swoop tokens: only the final seat begins with 1 token; everyone else stays at 0. Tokens are capped at 2.
 Agree on a target score (default 5).
 5) Turn Structure
 On your turn:
@@ -69,7 +69,7 @@ You may Bank at any time on your turn (including between your first and optional
 • Returning pieces (carrying baskets) do not slide.
 • Deterrents trigger now: any piece on a deterrent is removed. If it was carrying, its basket returns to the lane’s top.
 • Deliveries: each carrying piece at step 1 delivers: +1 point, then remove the piece.
-• Earn 1 Swoop token. (Tokens are only gained on Bank, never on a Bust.)
+• Earn 1 Swoop token (max 2). Tokens are never gained on a Bust.
 • Deactivate all your pieces; pass turn.
 7.2 Bust — after rolling, you cannot act
 You Bust if, given your roll: no pair can make a legal Move and no piece can Swoop legally (i.e., you have no usable token Swoops). If at least one pair can Move, you must take at least one Move this roll before you may Bank.
@@ -84,7 +84,7 @@ Max pieces on board: 5 per player. If you already have 5, you cannot spawn.
 White/blank cells at the extreme ends are visual padding only. Use only the colored lane tiles.
 Shared occupancy: If a Move or Swoop targets an occupied cell, pushing resolves the conflict (no illegal “blocked” lands).
 Basket scarcity: Each even lane holds at most 1 basket at a time. If a carrying piece is removed, that basket reappears at the lane’s top step.
-Turn order: Monkeys start by default (feel free to randomize). Give starting Swoop tokens accordingly (first player 0; second player 1).
+Turn order: Monkeys start by default (feel free to randomize). Only the final seat keeps swoop tokens (max 2); all other seats reset to 0 after each turn.
 No Tailwind: There is no opponent reaction after Swoops.
 10) Scoring & Winning
 Delivery = 1 point.
@@ -104,5 +104,4 @@ Push: Forced displacement of an occupant when a Move/Swoop lands on its cell (ca
 Active piece: A lane you’ve engaged this turn (max 2).
 Basket: Pickup at the top of even lanes; carried pieces move home.
 Swoop: Sideways shift to an adjacent lane; may include odd-lane slope (↑/↓) at the top.
-Tailwind: Opponent’s immediate +1 (or spawn) after someone Swoops.
 Active piece: A lane you’ve engaged this turn (max 2).

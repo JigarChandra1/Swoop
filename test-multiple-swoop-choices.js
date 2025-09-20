@@ -21,10 +21,10 @@ const LANES = [
   { sum: 12, L: 3, basket: true },
 ];
 
-function occupied(game, r, side, step) {
+function occupied(game, r, step) {
   for (const pl of game.players) {
     for (const pc of pl.pieces) {
-      if (pc.r === r && pc.side === side && pc.step === step) return true;
+      if (pc.r === r && pc.step === step) return true;
     }
   }
   return false;
@@ -42,7 +42,7 @@ function potentialTopStepSwoops(game, pc) {
     if (r2 < 0 || r2 >= LANES.length) continue;
     
     const step2 = LANES[r2].L;
-    if (!occupied(game, r2, pc.side, step2)) {
+    if (!occupied(game, r2, step2)) {
       targets.push({ r: r2, step: step2 });
     }
   }
@@ -54,8 +54,8 @@ function testMultipleSwoopChoices() {
   
   const game = {
     players: [
-      { side: 'L', pieces: [] },
-      { side: 'R', pieces: [] }
+      { seat: 0, pieces: [] },
+      { seat: 1, pieces: [] }
     ],
     current: 0,
     baskets: LANES.map(lane => lane.basket),
@@ -65,7 +65,6 @@ function testMultipleSwoopChoices() {
   // Place piece at top of lane 8 (sum 9, L=6)
   const pc = {
     r: 7,        // Lane index 7 = sum 9
-    side: 'L',
     step: 6,     // Top step (L=6 for sum 9)
     carrying: false,
     active: true
@@ -106,8 +105,8 @@ function testEdgeCases() {
   
   const game = {
     players: [
-      { side: 'L', pieces: [] },
-      { side: 'R', pieces: [] }
+      { seat: 0, pieces: [] },
+      { seat: 1, pieces: [] }
     ],
     current: 0,
     baskets: LANES.map(lane => lane.basket),
@@ -116,7 +115,7 @@ function testEdgeCases() {
   
   // Test 1: Piece at edge lane (lane 0, sum 2)
   console.log('\nTest 1: Piece at edge lane (sum 2)');
-  const pc1 = { r: 0, side: 'L', step: 3, carrying: false, active: true };
+  const pc1 = { r: 0, , step: 3, carrying: false, active: true };
   game.players[0].pieces = [pc1];
   
   const targets1 = potentialTopStepSwoops(game, pc1);
@@ -124,7 +123,7 @@ function testEdgeCases() {
   
   // Test 2: Piece at other edge lane (lane 10, sum 12)
   console.log('\nTest 2: Piece at other edge lane (sum 12)');
-  const pc2 = { r: 10, side: 'L', step: 3, carrying: false, active: true };
+  const pc2 = { r: 10, , step: 3, carrying: false, active: true };
   game.players[0].pieces = [pc2];
   
   const targets2 = potentialTopStepSwoops(game, pc2);
@@ -132,9 +131,9 @@ function testEdgeCases() {
   
   // Test 3: Blocked targets
   console.log('\nTest 3: Blocked targets');
-  const pc3 = { r: 5, side: 'L', step: 7, carrying: false, active: true }; // Lane 5 (sum 6)
-  const blocker1 = { r: 4, side: 'L', step: 5, carrying: false, active: true }; // Block lane 4
-  const blocker2 = { r: 6, side: 'L', step: 8, carrying: false, active: true }; // Block lane 6
+  const pc3 = { r: 5, , step: 7, carrying: false, active: true }; // Lane 5 (sum 6)
+  const blocker1 = { r: 4, , step: 5, carrying: false, active: true }; // Block lane 4
+  const blocker2 = { r: 6, , step: 8, carrying: false, active: true }; // Block lane 6
   
   game.players[0].pieces = [pc3];
   game.players[1].pieces = [blocker1, blocker2];

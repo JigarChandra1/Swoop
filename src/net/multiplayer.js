@@ -38,8 +38,12 @@ export async function createRoom() {
   return j('POST', '/api/rooms');
 }
 
-export async function joinRoom(code, { name, preferredSide } = {}) {
-  return j('POST', `/api/rooms/${code}/join`, { name, preferredSide });
+export async function joinRoom(code, opts = {}) {
+  const { name, preferredSeat, preferredSide } = opts || {};
+  const payload = { name };
+  if (preferredSeat !== undefined) payload.preferredSeat = preferredSeat;
+  else if (preferredSide !== undefined) payload.preferredSeat = preferredSide;
+  return j('POST', `/api/rooms/${code}/join`, payload);
 }
 
 export async function getState(code, since) {
@@ -106,7 +110,14 @@ export function subscribe(code, onSync) {
 
 // Simple helper to persist credentials per room
 export function loadCreds(code) {
-  try { return JSON.parse(localStorage.getItem(`SWOOP_CREDS_${code}`)); } catch (_) { return null; }
+  try {
+    const data = JSON.parse(localStorage.getItem(`SWOOP_CREDS_${code}`));
+    if (data && data.side !== undefined && data.seat === undefined) {
+      data.seat = data.side;
+      delete data.side;
+    }
+    return data;
+  } catch (_) { return null; }
 }
 export function saveCreds(code, creds) {
   try { localStorage.setItem(`SWOOP_CREDS_${code}`, JSON.stringify(creds)); } catch (_) {}

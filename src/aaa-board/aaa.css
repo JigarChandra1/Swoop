@@ -113,6 +113,12 @@ body.skin-aaa .swoop-piece[data-player="0"].carry { background-image: url('/RnD/
 body.skin-aaa .swoop-piece[data-player="1"] { background-image: url('/RnD/img24.png'); }
 body.skin-aaa .swoop-piece[data-player="1"].active { background-image: url('/RnD/img23.png'); }
 body.skin-aaa .swoop-piece[data-player="1"].carry { background-image: url('/RnD/img1.png'); }
+body.skin-aaa .swoop-piece[data-player="2"] { background-image: url('/RnD/crab_inactive1.png'); }
+body.skin-aaa .swoop-piece[data-player="2"].active,
+body.skin-aaa .swoop-piece[data-player="2"].carry { background-image: url('/RnD/crab_active1.png'); }
+body.skin-aaa .swoop-piece[data-player="3"] { background-image: url('/RnD/turtle_inactive1.png'); }
+body.skin-aaa .swoop-piece[data-player="3"].active,
+body.skin-aaa .swoop-piece[data-player="3"].carry { background-image: url('/RnD/turtle_active1.png'); }
 
 body.skin-aaa .swoop-piece.carry::after { display: none; }
 body.skin-aaa .swoop-basket {

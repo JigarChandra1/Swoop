@@ -1,5 +1,8 @@
 # Swoop
-A 2 player push-your-luck board game.
+A 2–4 player push-your-luck board game.
+
+- Supports Monkeys, Seagulls, Crabs, and Turtles (2–4 seats).
+- Every player gains up to 1 swoop token on Bank (capped at 2).
 
 ## Multiplayer Backend (In‑Memory)
 
@@ -19,8 +22,8 @@ Allow CORS by origin with `CORS_ORIGIN`, otherwise `*`.
   - Create a new room. Returns `{ code, version, state, room }`.
 
 - POST `/api/rooms/:code/join`
-  - Body: `{ name, preferredSide: 0|1 }`
-  - Join room (assigns side 0 or 1 if available; else spectator). Returns `{ playerId, token, side, version, state, room }`.
+  - Body: `{ name, preferredSeat: 0-3 }`
+  - Join room (assigns side 0 or 1 if available; else spectator). Returns `{ playerId, token, seat, version, state, room }`.
 
 - GET `/api/rooms/:code/state?since=:version`
   - Fetch current state. If `since` equals current version, returns `{ unchanged: true, version }`.
@@ -28,7 +31,7 @@ Allow CORS by origin with `CORS_ORIGIN`, otherwise `*`.
 - POST `/api/rooms/:code/state`
   - Body: `{ playerId, token, baseVersion, state }`
   - Optimistic concurrency: updates state iff `baseVersion === current version`.
-  - Turn enforcement: only the seated player whose turn it is may update; during `tailwind*` modes, the opponent may update. Spectators cannot update.
+  - Turn enforcement: only the seated player whose turn it is may update. Spectators cannot update.
   - Player names are derived from seat assignments; icons are preserved server‑side.
   - Returns `{ ok: true, version }`, or `409 { error: 'version_conflict'|'not_your_turn', version, state }`.
 
@@ -49,7 +52,7 @@ Notes:
 `src/net/multiplayer.js` provides tiny helpers:
 
 - `createRoom()`
-- `joinRoom(code, { name, preferredSide })`
+- `joinRoom(code, { name, preferredSeat })`
 - `getState(code, since)`
 - `pushState(code, { playerId, token, baseVersion, state })`
 - `subscribe(code, onSync)` — SSE; call returned function to unsubscribe
@@ -69,6 +72,7 @@ You can set the backend base URL via `VITE_SW_BACKEND_URL` (e.g. `http://localho
 - Enter your name and either:
   - Join an existing room by entering its 6-digit code, or
   - Click Create to make a new room and auto-join.
+- The 🔄 New button now prompts for the desired player count (2–4) before starting fresh.
 - While connected, the client auto-syncs via SSE and pushes state changes with optimistic concurrency.
 
 Dev tip: run both servers
@@ -167,13 +171,15 @@ npm run simulate -- --rounds=1000 --target=5 --seed=42
 ```
 
 Bot strategies:
-- Bot 1: Prefers highest odd sums (11 > 9 > 7 > 5 > 3), then highest overall; banks when it delivered in the turn or after ~3 actions.
-- Bot 2: Mixed; tends to favor even/high sums for baskets about half the time, otherwise highest sums; banks if delivered, after ~4 actions, or occasionally at random.
+- `aggressive`: Prefers highest odd sums (11 > 9 > 7 > 5 > 3), then highest overall; banks when it delivered in the turn or after ~3 actions.
+- `balanced`: Mixed; tends to favor even/high sums for baskets about half the time, otherwise highest sums; banks if delivered, after ~4 actions, or occasionally at random.
+- `conservative`: Prioritises safe checkpoint play, banking early when multiple lanes are exposed.
+- `pro`: League-ready bot using expectimax search, stochastic bust modelling, and a rich heuristic evaluator (tokens, pushes, deterrents, deliveries). It spends tokens tactically, samples future rolls before banking, and evaluates multi-step move plans.
 
 Notes and future considerations for bots (non-reactive for now):
 - Adaptive banking by risk of bust and deterrent exposure.
 - Lane congestion and blocker awareness in pair selection.
-- Opponent threat modeling and tailwind optimization (both sides).
+- Opponent threat modeling and smarter swoop usage.
 - Basket scarcity awareness and prioritization of safe returns.
 - Heuristics for when to Swoop vs Move under odd-lane slope.
 - Managing active-piece cap (max 2) strategically across lanes.
