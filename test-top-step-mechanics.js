@@ -32,10 +32,10 @@ function activeCount(pl) {
   return pl.pieces.filter((p) => p.active).length;
 }
 
-function occupied(game, r, side, step) {
+function occupied(game, r, step) {
   for (const pl of game.players) {
     for (const pc of pl.pieces) {
-      if (pc.r === r && pc.side === side && pc.step === step) return true;
+      if (pc.r === r && pc.step === step) return true;
     }
   }
   return false;
@@ -49,9 +49,10 @@ function pieceOnLane(pl, r) {
 function createTestGame() {
   return {
     players: [
-      { side: 'L', pieces: [] },
-      { side: 'R', pieces: [] }
+      { seat: 0, pieces: [] },
+      { seat: 1, pieces: [] }
     ],
+    playerCount: 2,
     current: 0,
     baskets: LANES.map(lane => lane.basket),
     moveHistory: []
@@ -61,7 +62,6 @@ function createTestGame() {
 function createTestPiece(r, step, carrying = false, active = true) {
   return {
     r: r,
-    side: 'L',
     step: step,
     carrying: carrying,
     active: active
@@ -77,7 +77,7 @@ function canTopStepMoveDown(game, pc) {
   const L = LANES[pc.r].L;
   if (pc.step !== L) return false;
   const downStep = L - 1;
-  return downStep >= 1 && !occupied(game, pc.r, pc.side, downStep);
+  return downStep >= 1 && !occupied(game, pc.r, downStep);
 }
 
 function canTopStepFreeSwoop(game, pc) {
@@ -97,7 +97,7 @@ function potentialTopStepSwoops(game, pc) {
     if (r2 < 0 || r2 >= LANES.length) continue;
     
     const step2 = LANES[r2].L;
-    if (!occupied(game, r2, pc.side, step2)) {
+    if (!occupied(game, r2, step2)) {
       targets.push({ r: r2, step: step2 });
     }
   }

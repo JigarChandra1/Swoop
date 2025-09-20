@@ -58,12 +58,50 @@ const LANES = [
   { sum: 12, L: 3, basket: true },
 ];
 
-function initialGame() {
+const MIN_PLAYERS = 2;
+const MAX_PLAYERS = 4;
+const PLAYER_PROFILES = [
+  { key: 'monkeys', name: 'Monkeys', badge: '🐒', piece: '🐒', active: '🐵' },
+  { key: 'seagulls', name: 'Seagulls', badge: '🕊️', piece: '🕊️', active: '🦅' },
+  { key: 'crabs', name: 'Crabs', badge: '🦀', piece: '🦀', active: '🦀' },
+  { key: 'turtles', name: 'Turtles', badge: '🐢', piece: '🐢', active: '🐢' }
+];
+
+function normalizePlayerCount(count) {
+  const n = Number(count);
+  if (!Number.isFinite(n)) return MIN_PLAYERS;
+  return Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, Math.round(n)));
+}
+
+function buildPlayers(count) {
+  const clamped = normalizePlayerCount(count);
+  return PLAYER_PROFILES.slice(0, clamped).map((profile, idx) => ({
+    id: idx,
+    profile: profile.key,
+    name: profile.name,
+    badgeIcon: profile.badge,
+    pieceIcon: profile.piece,
+    activeIcon: profile.active,
+    score: 0,
+    swoopTokens: idx === clamped - 1 ? 1 : 0,
+    pieces: []
+  }));
+}
+
+function enforceTokenPolicy(players, _count) {
+  players.forEach((pl) => {
+    const val = Number(pl.swoopTokens ?? 0);
+    pl.swoopTokens = Math.max(0, Math.min(2, Number.isNaN(val) ? 0 : val));
+  });
+}
+
+function initialGame(playerCount = MIN_PLAYERS) {
+  const count = normalizePlayerCount(playerCount);
+  const players = buildPlayers(count);
+  enforceTokenPolicy(players, count);
   return {
-    players: [
-      { name: 'Player L', pieceIcon: '🐒', activeIcon: '🐵', score: 0, swoopTokens: 0, pieces: [] },
-      { name: 'Player R', pieceIcon: '🕊️', activeIcon: '🦅', score: 0, swoopTokens: 1, pieces: [] },
-    ],
+    playerCount: count,
+    players,
     current: 0,
     rolled: null,
     selectedPair: null,
@@ -71,7 +109,7 @@ function initialGame() {
     rollMovesDone: 0,
     mode: 'preroll',
     baskets: LANES.map((l) => l.basket),
-    message: 'Player L, roll the dice!',
+    message: `${players[0].name}, roll the dice!`,
     transferSource: null,
     transferTargets: null,
     pieceChoices: null,
@@ -111,6 +149,27 @@ async function loadRoomPersistent(code){
     sseClients: new Set(),
   };
   (data.players || []).forEach(p => room.players.set(p.id, p));
+  if (!room.state) {
+    room.state = initialGame();
+  }
+  const loadedCount = normalizePlayerCount(room.state.playerCount || (Array.isArray(room.state.players) ? room.state.players.length : MIN_PLAYERS));
+  room.state.playerCount = loadedCount;
+  if (!Array.isArray(room.state.players)) {
+    room.state.players = buildPlayers(loadedCount);
+  } else if (room.state.players.length < loadedCount) {
+    const base = buildPlayers(loadedCount);
+    for (let i = room.state.players.length; i < loadedCount; i++) {
+      room.state.players[i] = base[i];
+    }
+  } else if (room.state.players.length > loadedCount) {
+    room.state.players = room.state.players.slice(0, loadedCount);
+  }
+  enforceTokenPolicy(room.state.players, loadedCount);
+  for (const info of room.players.values()) {
+    if (Number.isInteger(info.seat) && info.seat >= 0 && info.seat < room.state.players.length) {
+      room.state.players[info.seat].name = info.name;
+    }
+  }
   roomsCache.set(code, room);
   return room;
 }
@@ -144,8 +203,8 @@ async function createRoom(){
 
 function getPublicRoom(room) {
   // Do not expose tokens
-  const players = Array.from(room.players.values()).map((p) => ({ id: p.id, name: p.name, side: p.side, joinedAt: p.joinedAt }));
-  return { code: room.code, version: room.version, createdAt: room.createdAt, lastActivity: room.lastActivity, players };
+  const players = Array.from(room.players.values()).map((p) => ({ id: p.id, name: p.name, seat: p.seat, joinedAt: p.joinedAt }));
+  return { code: room.code, version: room.version, createdAt: room.createdAt, lastActivity: room.lastActivity, playerCount: room.state?.playerCount || MIN_PLAYERS, players };
 }
 
 async function bumpVersion(room) {
@@ -181,36 +240,51 @@ app.post('/api/rooms', async (req, res) => {
   res.status(201).json({ code: room.code, version: room.version, state: room.state, room: getPublicRoom(room) });
 });
 
-// Join a room with a name and optional preferred side (0|1)
+// Join a room with a name and optional preferred seat (0-3)
 app.post('/api/rooms/:code/join', async (req, res) => {
   const { code } = req.params;
   const room = await getRoom(code);
   if (!room) return res.status(404).json({ error: 'room_not_found' });
-  const { name, preferredSide } = req.body || {};
+  const { name, preferredSeat } = req.body || {};
   const id = genId(10);
   const token = genId(18);
 
-  let side = null; // spectator by default if sides taken
-  const takenSides = new Set(Array.from(room.players.values()).map((p) => p.side).filter((s) => s === 0 || s === 1));
-  if (!takenSides.has(0) || !takenSides.has(1)) {
-    // at least one seat is free
-    if ((preferredSide === 0 || preferredSide === 1) && !takenSides.has(preferredSide)) {
-      side = preferredSide;
-    } else {
-      side = takenSides.has(0) ? 1 : 0;
+  const capacity = normalizePlayerCount(room.state?.playerCount || MIN_PLAYERS);
+
+  // Ensure state players array matches declared capacity
+  if (!Array.isArray(room.state.players)) {
+    room.state.players = buildPlayers(capacity);
+  } else if (room.state.players.length < capacity) {
+    const base = buildPlayers(capacity);
+    for (let i = room.state.players.length; i < capacity; i++) {
+      room.state.players[i] = base[i];
     }
   }
 
-  const player = { id, name: name || `Player-${id.slice(0, 4)}`, token, side, joinedAt: Date.now() };
+  let seat = null; // spectator by default if seats taken
+  const takenSeats = new Set(Array.from(room.players.values()).map((p) => p.seat).filter((s) => Number.isInteger(s)));
+  if (takenSeats.size < capacity) {
+    const preferred = Number(preferredSeat);
+    if (Number.isInteger(preferred) && preferred >= 0 && preferred < capacity && !takenSeats.has(preferred)) {
+      seat = preferred;
+    } else {
+      for (let i = 0; i < capacity; i++) {
+        if (!takenSeats.has(i)) { seat = i; break; }
+      }
+    }
+  }
+
+  const player = { id, name: name || `Player-${id.slice(0, 4)}`, token, seat, joinedAt: Date.now() };
   room.players.set(id, player);
 
   // If seated, update visible name in state
-  if (side === 0 || side === 1) {
-    room.state.players[side].name = player.name;
+  if (Number.isInteger(seat) && seat >= 0 && seat < capacity) {
+    room.state.players[seat].name = player.name;
+    enforceTokenPolicy(room.state.players, capacity);
     await bumpVersion(room);
   }
   await saveRoomPersistent(room);
-  res.status(201).json({ playerId: id, token, side, room: getPublicRoom(room), version: room.version, state: room.state });
+  res.status(201).json({ playerId: id, token, seat, room: getPublicRoom(room), version: room.version, state: room.state });
 });
 
 // Get current room state (optionally delta check)
@@ -241,46 +315,61 @@ app.post('/api/rooms/:code/state', async (req, res) => {
     return res.status(409).json({ error: 'version_conflict', version: room.version, state: room.state });
   }
 
-  // Enforce: only a seated player can update, and only the acting side for the current server state.
-  if (!(player.side === 0 || player.side === 1)) {
+  const capacity = normalizePlayerCount(room.state?.playerCount || MIN_PLAYERS);
+
+  // Enforce: only a seated player can update, and only the acting seat for the current server state.
+  if (!Number.isInteger(player.seat) || player.seat < 0 || player.seat >= capacity) {
     return res.status(403).json({ error: 'spectator_cannot_update' });
   }
 
-  // Determine the acting side based on the server's current state (pre-update)
-  const mode = room.state?.mode;
-  const actingSide = (mode === 'tailwind' || mode === 'tailwindTopStepChoice' || mode === 'tailwindChooseSwoop')
-    ? (1 - (room.state?.current ?? 0))
-    : (room.state?.current ?? 0);
+  // Determine the acting seat based on the server's current state (pre-update)
+  const currentRaw = Number.isInteger(room.state?.current) ? room.state.current : 0;
+  const actingSeat = ((currentRaw % capacity) + capacity) % capacity;
 
-  if (player.side !== actingSide) {
+  if (player.seat !== actingSeat) {
     return res.status(409).json({ error: 'not_your_turn', version: room.version, state: room.state });
   }
 
-  // Sanitize: lock player identities for seated sides and keep icons
+  // Sanitize: lock player identities for seated seats and keep icons
   try {
     const next = { ...state };
-    if (Array.isArray(next.players) && next.players.length >= 2 && Array.isArray(room.state?.players)) {
-      const prev = room.state.players;
-      const seat0 = Array.from(room.players.values()).find(p => p.side === 0);
-      const seat1 = Array.from(room.players.values()).find(p => p.side === 1);
-      next.players = [
-        {
-          ...next.players[0],
-          name: seat0?.name || next.players[0]?.name || prev[0]?.name,
-          pieceIcon: prev[0]?.pieceIcon,
-          activeIcon: prev[0]?.activeIcon,
-        },
-        {
-          ...next.players[1],
-          name: seat1?.name || next.players[1]?.name || prev[1]?.name,
-          pieceIcon: prev[1]?.pieceIcon,
-          activeIcon: prev[1]?.activeIcon,
-        },
-      ];
-    }
-    room.state = next;
+    const incomingPlayers = Array.isArray(next.players) ? next.players : [];
+    const prevPlayers = Array.isArray(room.state?.players) ? room.state.players : [];
+    const nextCount = normalizePlayerCount(next.playerCount || incomingPlayers.length || room.state?.playerCount || MIN_PLAYERS);
+    const basePlayers = buildPlayers(nextCount);
+    const mergedPlayers = basePlayers.map((base, idx) => {
+      const incoming = incomingPlayers[idx] || {};
+      const prev = prevPlayers[idx] || {};
+      const occupant = Array.from(room.players.values()).find((p) => p.seat === idx);
+      return {
+        ...base,
+        name: occupant?.name || incoming.name || prev.name || base.name,
+        profile: incoming.profile || prev.profile || base.profile,
+        pieceIcon: prev.pieceIcon || base.pieceIcon,
+        activeIcon: prev.activeIcon || base.activeIcon,
+        badgeIcon: prev.badgeIcon || base.badgeIcon,
+        score: Number.isFinite(Number(incoming.score)) ? Number(incoming.score) : Number(prev.score) || 0,
+        swoopTokens: incoming.swoopTokens ?? prev.swoopTokens ?? base.swoopTokens,
+        pieces: Array.isArray(incoming.pieces) ? incoming.pieces : (Array.isArray(prev.pieces) ? prev.pieces : [])
+      };
+    });
+    enforceTokenPolicy(mergedPlayers, nextCount);
+
+    const sanitizedCurrent = Number.isInteger(next.current) ? ((next.current % nextCount) + nextCount) % nextCount : 0;
+
+    room.state = {
+      ...room.state,
+      ...next,
+      playerCount: nextCount,
+      players: mergedPlayers,
+      current: sanitizedCurrent,
+    };
   } catch (_) {
     room.state = state; // fallback — but names/icons likely preserved
+    if (!Array.isArray(room.state.players)) {
+      room.state.players = buildPlayers(normalizePlayerCount(room.state.playerCount || MIN_PLAYERS));
+    }
+    enforceTokenPolicy(room.state.players, normalizePlayerCount(room.state.playerCount || room.state.players.length || MIN_PLAYERS));
   }
   await bumpVersion(room);
   res.json({ ok: true, version: room.version });

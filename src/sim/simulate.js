@@ -142,13 +142,55 @@ function hashStr(str) {
   return h >>> 0;
 }
 
+const MIN_PLAYERS = 2;
+const MAX_PLAYERS = 4;
+const PLAYER_PROFILES = [
+  { key: 'monkeys', name: 'Bot Monkeys', badge: '🐒', piece: '🐒', active: '🐵' },
+  { key: 'seagulls', name: 'Bot Seagulls', badge: '🕊️', piece: '🕊️', active: '🦅' },
+  { key: 'crabs', name: 'Bot Crabs', badge: '🦀', piece: '🦀', active: '🦀' },
+  { key: 'turtles', name: 'Bot Turtles', badge: '🐢', piece: '🐢', active: '🐢' }
+];
+
+function normalizePlayerCount(count) {
+  const n = Number(count);
+  if (!Number.isFinite(n)) return MIN_PLAYERS;
+  return Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, Math.round(n)));
+}
+
+function buildPlayers(count) {
+  const clamped = normalizePlayerCount(count);
+  return PLAYER_PROFILES.slice(0, clamped).map((profile, idx) => ({
+    id: idx,
+    profile: profile.key,
+    name: profile.name,
+    badgeIcon: profile.badge,
+    pieceIcon: profile.piece,
+    activeIcon: profile.active,
+    score: 0,
+    swoopTokens: idx === clamped - 1 ? 1 : 0,
+    pieces: [],
+  }));
+}
+
+function enforceTokenPolicy(players, _count) {
+  players.forEach((pl) => {
+    const val = Number(pl.swoopTokens ?? 0);
+    pl.swoopTokens = Math.max(0, Math.min(2, Number.isNaN(val) ? 0 : val));
+  });
+}
+
+function nextSeatIndex(current, count) {
+  return (current + 1) % count;
+}
+
 // --- Game state helpers ---
-function initialGame() {
+function initialGame(playerCount = MIN_PLAYERS) {
+  const count = normalizePlayerCount(playerCount);
+  const players = buildPlayers(count);
+  enforceTokenPolicy(players, count);
   return {
-    players: [
-      { name: 'Bot1', side: 'L', score: 0, swoopTokens: 0, pieces: [] },
-      { name: 'Bot2', side: 'R', score: 0, swoopTokens: 1, pieces: [] },
-    ],
+    playerCount: count,
+    players,
     current: 0,
     baskets: LANES.map((l) => l.basket),
     moveHistory: [], // Track all moves for analysis
@@ -157,7 +199,7 @@ function initialGame() {
   };
 }
 
-function occupied(game, r, _sideIgnored, step) {
+function occupied(game, r, step) {
   // Shared-lane occupancy across both players
   for (const pl of game.players) {
     if (pl.pieces.some((pc) => pc.r === r && pc.step === step)) return true;
@@ -179,7 +221,6 @@ function ensurePieceForSum(game, pl, sum) {
 
   // Get all pieces on this route
   const piecesOnRoute = pl.pieces.filter((p) => p.r === r);
-  const side = pl.side;
 
   if (piecesOnRoute.length > 0) {
     // Get all viable pieces (active pieces that can move + inactive pieces that can be activated and move)
@@ -248,8 +289,8 @@ function ensurePieceForSum(game, pl, sum) {
 
   // No pieces on route - try to spawn a new piece
   if (pl.pieces.length >= 5 || activeCount(pl) >= 2) return null;
-  if (occupied(game, r, null, 1)) return null;
-  const pc = { r, side, step: 1, carrying: false, active: true };
+  if (occupied(game, r, 1)) return null;
+  const pc = { r, step: 1, carrying: false, active: true };
   pl.pieces.push(pc);
   // Log piece spawn
   game.moveHistory.push({
@@ -341,7 +382,7 @@ function canMoveOnSum(game, pl, sum) {
     return false;
   } else {
     // No pieces on route - check if we can spawn a new piece
-    return pl.pieces.length < 5 && !occupied(game, r, null, 1) && activeCount(pl) < 2;
+    return pl.pieces.length < 5 && !occupied(game, r, 1) && activeCount(pl) < 2;
   }
 }
 
@@ -720,66 +761,11 @@ function bank(game) {
   pl.pieces = kept;
   pl.score += delivered;
   resolveDeterrents(game, pl);
-  // Earn a swoop token on Bank (not on Bust)
-  pl.swoopTokens = (pl.swoopTokens || 0) + 1;
+  pl.swoopTokens = Math.min(2, (pl.swoopTokens || 0) + 1);
+  enforceTokenPolicy(game.players, game.playerCount);
   for (const p of pl.pieces) p.active = false;
-  game.current = 1 - game.current;
+  game.current = nextSeatIndex(game.current, game.playerCount);
   return delivered;
-}
-
-// --- Tailwind: simple policy for the non-active player ---
-function tailwind(game, metrics) {
-  const opp = game.players[1 - game.current];
-  const side = opp.side;
-
-  // Try to advance pieces - prioritize normal advancement over removal
-  const candidates = [...opp.pieces];
-
-  // First pass: try normal advancement within lane bounds (with push)
-  for (const pc of candidates) {
-    const L = LANES[pc.r].L;
-    const dir = pc.carrying ? -1 : +1;
-    const ns = pc.step + dir;
-
-    // Normal advancement within lane bounds
-    if (ns >= 1 && ns <= L) {
-      performMoveWithPush(game, pc, { r: pc.r, step: ns });
-      metrics.tailwindAdvances++;
-      return true;
-    }
-  }
-
-  // Second pass: handle advancement beyond final step (removal)
-  for (const pc of candidates) {
-    const L = LANES[pc.r].L;
-    const dir = pc.carrying ? -1 : +1;
-    const ns = pc.step + dir;
-
-    // Handle advancement beyond final step
-    if (ns > L) {
-      // Non-carrying piece advancing beyond final step - remove from board
-      if (!pc.carrying) {
-        const index = opp.pieces.indexOf(pc);
-        if (index > -1) opp.pieces.splice(index, 1);
-        metrics.tailwindAdvances++;
-        return true;
-      }
-      // Carrying piece can't advance beyond final step
-    }
-  }
-
-  // Otherwise, spawn if possible
-  if (opp.pieces.length < 5) {
-    for (let r = 0; r < LANES.length; r++) {
-      if (!occupied(game, r, null, 1)) {
-        opp.pieces.push({ r, side, step: 1, carrying: false, active: false });
-        metrics.tailwindSpawns++;
-        return true;
-      }
-    }
-  }
-
-  return false; // no-op
 }
 
 // --- Dice ---
@@ -1247,7 +1233,8 @@ function applyBust(game) {
   pl.score += delivered;
   resolveDeterrents(game, pl);
   for (const p of pl.pieces) p.active = false;
-  game.current = 1 - game.current;
+  enforceTokenPolicy(game.players, game.playerCount);
+  game.current = nextSeatIndex(game.current, game.playerCount);
   return delivered;
 }
 
@@ -1259,13 +1246,10 @@ function playGame(targetScore = 2, rng, bots, gameIndex = 0, maxTurns = 1000, ve
 
   const metrics = {
     turns: 0,
-    turnsByPlayer: [0, 0],
+    turnsByPlayer: Array.from({ length: game.players.length }, () => 0),
     rolls: 0,
     busts: 0,
     banks: 0,
-    tailwindEvents: 0,
-    tailwindAdvances: 0,
-    tailwindSpawns: 0,
     deliveries: 0,
     transfers: 0,
   };
@@ -1518,9 +1502,6 @@ function runSimulation({ rounds, target, seed, saveReport = false, botType1 = 'a
     rolls: 0,
     busts: 0,
     banks: 0,
-    tailwindEvents: 0,
-    tailwindAdvances: 0,
-    tailwindSpawns: 0,
     deliveries: 0,
     transfers: 0,
   };
@@ -1541,9 +1522,6 @@ function runSimulation({ rounds, target, seed, saveReport = false, botType1 = 'a
     agg.rolls += metrics.rolls;
     agg.busts += metrics.busts;
     agg.banks += metrics.banks;
-    agg.tailwindEvents += metrics.tailwindEvents;
-    agg.tailwindAdvances += metrics.tailwindAdvances;
-    agg.tailwindSpawns += metrics.tailwindSpawns;
     agg.deliveries += metrics.deliveries;
     agg.transfers += metrics.transfers || 0;
 
@@ -1571,13 +1549,10 @@ function runSimulation({ rounds, target, seed, saveReport = false, botType1 = 'a
     avg_rolls_per_game: agg.rolls / agg.games,
     avg_busts_per_game: agg.busts / agg.games,
     avg_banks_per_game: agg.banks / agg.games,
-    avg_tailwind_events_per_game: agg.tailwindEvents / agg.games,
-    avg_tailwind_advances_per_game: agg.tailwindAdvances / agg.games,
-    avg_tailwind_spawns_per_game: agg.tailwindSpawns / agg.games,
     avg_deliveries_per_game: agg.deliveries / agg.games,
     notes: [
-      'Enhanced bots with improved banking strategies and complete game mechanics.',
-      'Includes deterrents, proper bust handling, and comprehensive move tracking.',
+      'Tailwind reactions have been retired; bots now play without reactive phases.',
+      'Simulation enforces the new swoop-token cap and last-seat token rule.',
       'Future improvements: adaptive banking, lane congestion awareness, opponent threat modeling.'
     ],
   };

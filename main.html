@@ -15,8 +15,9 @@
 body{margin:0;background:var(--bg);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:#1f2937}
 .wrap{max-width:1160px;margin:28px auto 56px;padding:0 16px;}
 h1{margin:0 0 10px;font-weight:800;letter-spacing:.2px}
-.badges{display:flex;gap:14px;align-items:center;float:right}
+.badges{display:flex;gap:14px;align-items:center;float:right;flex-wrap:wrap}
 .badge{background:#fff;border:1px solid var(--line);border-radius:12px;padding:6px 12px;box-shadow:0 3px 10px rgba(0,0,0,.06);display:flex;gap:8px;align-items:center}
+.badge.active-player{border-color:var(--accent);box-shadow:0 0 0 2px rgba(37,99,235,0.2)}
 .controls{display:flex;gap:10px;margin:8px 0 12px;flex-wrap:wrap}
 button{border:0;border-radius:8px;padding:8px 12px;background:#e5e7eb;color:#111827;font-weight:700;cursor:pointer}
 button.primary{background:var(--accent);color:#fff}
@@ -33,6 +34,11 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .piece{position:absolute;inset:0;display:grid;place-items:center;font-size:20px}
 .piece.active{font-size:22px}
 .piece.carry::after{content:'🧺'; position:absolute; right:-6px; top:-10px; font-size:14px;}
+.piece[data-player="2"],.piece[data-player="3"]{background-position:center;background-repeat:no-repeat;background-size:contain;font-size:0}
+.piece[data-player="2"]{background-image:url('/RnD/crab_inactive1.png');}
+.piece[data-player="2"].active,.piece[data-player="2"].carry{background-image:url('/RnD/crab_active1.png');}
+.piece[data-player="3"]{background-image:url('/RnD/turtle_inactive1.png');}
+.piece[data-player="3"].active,.piece[data-player="3"].carry{background-image:url('/RnD/turtle_active1.png');}
 .ring{position:absolute;inset:-2px;border-radius:8px;border:2px solid var(--accent);pointer-events:none}
 /* Merged final step styles */
 .center.merged-final{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
@@ -59,6 +65,9 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .modal .card h3{margin:0 0 8px}
 .modal textarea{width:100%;min-height:200px;border:1px solid var(--line);border-radius:8px;padding:10px;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace}
 .modal .row{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+.player-count-row{justify-content:flex-start;flex-wrap:wrap}
+.player-count-option{border:1px solid var(--line);border-radius:8px;padding:6px 12px;background:#f3f4f6;cursor:pointer;font-weight:600}
+.player-count-option.selected{background:var(--accent);color:#fff;border-color:var(--accent)}
 .small{font-size:12px;color:#6b7280}
 </style>
 </head>
@@ -66,10 +75,7 @@ button:disabled{opacity:.45;cursor:not-allowed}
 <div class="wrap">
   <div class="strip">
     <h1>Swoop — Pass & Play</h1>
-    <div class="badges">
-      <div class="badge">🐒 Monkeys&nbsp;<span id="score0">0</span> • ✈️ <span id="tokens0">0</span></div>
-      <div class="badge">🕊️ Seagulls&nbsp;<span id="score1">0</span> • ✈️ <span id="tokens1">1</span></div>
-    </div>
+    <div class="badges" id="scoreboard"></div>
   </div>
 
   <div id="status" style="margin:6px 0 2px;font-size:18px;font-weight:700">Loading…</div>
@@ -107,6 +113,24 @@ button:disabled{opacity:.45;cursor:not-allowed}
 </div>
 
 <div id="toast" class="toast" style="display:none"></div>
+
+<!-- New game modal -->
+<div id="newGameModal" class="modal" aria-hidden="true">
+  <div class="card">
+    <h3>Start New Game</h3>
+    <p class="small">Select number of players:</p>
+    <div class="row player-count-row">
+      <button type="button" class="player-count-option" data-count="2">2 Players</button>
+      <button type="button" class="player-count-option" data-count="3">3 Players</button>
+      <button type="button" class="player-count-option" data-count="4">4 Players</button>
+    </div>
+    <div class="row">
+      <span style="flex:1"></span>
+      <button type="button" id="cancelNewGame">Cancel</button>
+      <button type="button" id="confirmNewGame" class="primary">Start</button>
+    </div>
+  </div>
+</div>
 
 <!-- Load modal -->
 <div id="loadModal" class="modal" aria-hidden="true">
@@ -289,10 +313,50 @@ function pieceOnLane(pl, r){ return pl.pieces.find(p=>p.r===r); }
 function activeCount(pl){ return pl.pieces.filter(p=>p.active===true).length; }
 function isActiveForCurrent(pl, pc){ return pc.active===true; }
 
-const players=[
-  {name:'Monkeys', pieceIcon:'🐒', activeIcon:'🐵', score:0, swoopTokens:0, pieces:[]},
-  {name:'Seagulls', pieceIcon:'🕊️', activeIcon:'🦅', score:0, swoopTokens:1, pieces:[]}
+const MIN_PLAYERS = 2;
+const MAX_PLAYERS = 4;
+const PLAYER_PROFILES = [
+  { key:'monkeys', name:'Monkeys', badge:'🐒', piece:'🐒', active:'🐵' },
+  { key:'seagulls', name:'Seagulls', badge:'🕊️', piece:'🕊️', active:'🦅' },
+  { key:'crabs', name:'Crabs', badge:'🦀', piece:'🦀', active:'🦀' },
+  { key:'turtles', name:'Turtles', badge:'🐢', piece:'🐢', active:'🐢' }
 ];
+
+function normalizePlayerCount(count){
+  const n = Number(count);
+  if (!Number.isFinite(n)) return MIN_PLAYERS;
+  return Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, Math.round(n)));
+}
+
+function buildPlayers(count){
+  const clamped = normalizePlayerCount(count);
+  return PLAYER_PROFILES.slice(0, clamped).map((profile, idx) => ({
+    id: idx,
+    profile: profile.key,
+    name: profile.name,
+    badgeIcon: profile.badge,
+    pieceIcon: profile.piece,
+    activeIcon: profile.active,
+    score: 0,
+    swoopTokens: idx === clamped - 1 ? 1 : 0,
+    pieces: []
+  }));
+}
+
+function enforceTokenPolicy(playersArr, _count){
+  playersArr.forEach((pl) => {
+    const val = Number(pl.swoopTokens ?? 0);
+    pl.swoopTokens = Math.max(0, Math.min(2, isNaN(val) ? 0 : val));
+  });
+}
+
+function nextSeatIndex(currentSeat, count){
+  return (currentSeat + 1) % count;
+}
+
+let playerCount = MIN_PLAYERS;
+let players = buildPlayers(playerCount);
+enforceTokenPolicy(players, playerCount);
 // piece: {r, step, carrying:boolean, active:boolean}
 
 let current=0;
@@ -302,14 +366,12 @@ let rollMovesDone=0; // number of pair-based moves taken this roll (0..2)
 let mode='preroll';
 let topStepPiece=null;
 let topStepTargets=null;
-let tailwindPiece=null;
-let tailwindOptions=null;
-let tailwindSwoopTargets=null;
 let pieceChoices=null;
 let selectedSum=null;
 let transferSource=null;
 let transferTargets=null;
 let previousMode=null;
+let pendingPlayerCount = playerCount;
 
 const statusEl=document.getElementById('status');
 const rollBtn=document.getElementById('rollBtn');
@@ -325,6 +387,11 @@ const diceRow=document.getElementById('diceRow');
 const pairRow=document.getElementById('pairRow');
 const toastEl=document.getElementById('toast');
 const undoBtn=document.getElementById('undoBtn');
+const newGameModal=document.getElementById('newGameModal');
+const cancelNewGame=document.getElementById('cancelNewGame');
+const confirmNewGame=document.getElementById('confirmNewGame');
+const playerCountButtons=Array.from(document.querySelectorAll('.player-count-option'));
+const scoreboardEl=document.getElementById('scoreboard');
 
 /* ---------- UI helpers ---------- */
 function toast(m){ toastEl.textContent=m; toastEl.style.display='block'; setTimeout(()=>toastEl.style.display='none',1500); }
@@ -358,6 +425,7 @@ function placePieces(){
       const div=document.createElement('div'); 
       const useActiveIcon = (pi===current && isActiveForCurrent(pl,pc));
       div.className='piece'+(useActiveIcon?' active':'');
+      div.dataset.player=pi;
       div.textContent = useActiveIcon ? pl.activeIcon : pl.pieceIcon;
       if(pc.carrying){ div.classList.add('carry'); const d=document.createElement('div'); d.className='dir'; d.textContent='↩'; el.appendChild(d); }
       el.appendChild(div);
@@ -366,10 +434,15 @@ function placePieces(){
   }
 }
 function renderScores(){
-  document.getElementById('score0').textContent=players[0].score;
-  document.getElementById('score1').textContent=players[1].score;
-  const t0=document.getElementById('tokens0'); if(t0) t0.textContent=players[0].swoopTokens||0;
-  const t1=document.getElementById('tokens1'); if(t1) t1.textContent=players[1].swoopTokens||0;
+  if(!scoreboardEl) return;
+  scoreboardEl.innerHTML='';
+  players.forEach((pl, idx) => {
+    const badge=document.createElement('div');
+    badge.className='badge'+(idx===current?' active-player':'');
+    const icon = pl.badgeIcon || PLAYER_PROFILES[idx]?.badge || `P${idx+1}`;
+    badge.innerHTML=`${icon} ${pl.name}&nbsp;<span>${pl.score}</span> • ✈️ <span>${pl.swoopTokens||0}</span>`;
+    scoreboardEl.appendChild(badge);
+  });
 }
 
 function checkVictory(){
@@ -495,16 +568,58 @@ function render(){
 }
 
 /* ---------- Start/Next ---------- */
-function startGame(){ 
-  players[0].pieces=[]; players[1].pieces=[]; players[0].score=0; players[1].score=0;
-  current=0; rolled=null; selectedPair=null; mode='preroll';
-  diceRow.innerHTML=''; pairRow.innerHTML='';
-  render(); statusEl.textContent=`${players[current].name}, roll the dice!`;
+function startGame(count){
+  playerCount = count !== undefined ? normalizePlayerCount(count) : playerCount;
+  players = buildPlayers(playerCount);
+  enforceTokenPolicy(players, playerCount);
+  current=0;
+  rolled=null;
+  selectedPair=null;
+  rollMovesDone=0;
+  mode='preroll';
+  topStepPiece=null;
+  topStepTargets=null;
+  pieceChoices=null;
+  selectedSum=null;
+  transferSource=null;
+  transferTargets=null;
+  previousMode=null;
+  diceRow.innerHTML='';
+  pairRow.innerHTML='';
+  pendingPlayerCount = playerCount;
+  render();
+  statusEl.textContent=`${players[current].name}, roll the dice!`;
+}
+
+function updatePlayerCountButtons(){
+  playerCountButtons.forEach(btn => {
+    const count = Number(btn.dataset.count);
+    btn.classList.toggle('selected', count === pendingPlayerCount);
+  });
+}
+
+function openNewGameModal(){
+  pendingPlayerCount = playerCount;
+  updatePlayerCountButtons();
+  newGameModal.style.display='flex';
+  newGameModal.setAttribute('aria-hidden','false');
+}
+
+function closeNewGameModal(){
+  newGameModal.style.display='none';
+  newGameModal.setAttribute('aria-hidden','true');
 }
 function nextPlayer(){ 
   players[current].pieces.forEach(p=>p.active=false);
-  current=1-current; rolled=null; selectedPair=null; mode='preroll'; diceRow.innerHTML=''; pairRow.innerHTML='';
-  render(); statusEl.textContent=`${players[current].name}, roll the dice!`; 
+  current = nextSeatIndex(current, playerCount);
+  rolled=null;
+  selectedPair=null;
+  rollMovesDone=0;
+  mode='preroll';
+  diceRow.innerHTML='';
+  pairRow.innerHTML='';
+  render();
+  statusEl.textContent=`${players[current].name}, roll the dice!`; 
 }
 
 /* ---------- Dice / Pairs ---------- */
@@ -924,10 +1039,7 @@ function performMoveWithPush(pc, target, isSwoop = false){
 
 // Transfer functionality
 function canTransfer(){
-  // Allow transfers during any mode of the current player's turn (except game over and opponent's tailwind)
   if(mode === 'gameOver') return false;
-  if(mode === 'tailwind') return false; // Opponent's turn
-
   const pl = players[current];
   return pl.pieces.some(pc => pc.carrying);
 }
@@ -1274,183 +1386,7 @@ function usePairForSwoop(){
 function clearHighlights(){ for(const row of cells) for(const el of row){ el.classList.remove('highlight'); el.onclick=null; const hints=el.querySelectorAll('.slope'); hints.forEach(n=>n.remove()); } placePieces(); }
 
 /* ---------- Tailwind ---------- */
-function triggerTailwindSelection(){
-  mode='tailwind'; render();
-  const oppIndex = 1-current; const opp = players[oppIndex];
-  let hasOption=false;
-  if(opp.pieces.length>0){
-    statusEl.textContent = `${players[oppIndex].name} Tailwind: choose a piece to advance +1, or click a base to spawn.`;
-    for(const pc of opp.pieces){
-      const el = locate(pc.r, pc.step); if(!el) continue;
-      const L=lanes[pc.r].L; const dir = pc.carrying ? -1 : +1; const ns = pc.step + dir;
 
-      // Check if this piece can advance
-      let canAdvance = false;
-      if (ns > L) {
-        // Non-carrying piece can advance beyond final step (gets removed)
-        canAdvance = !pc.carrying;
-      } else if (ns >= 1) {
-        // Normal advancement within lane bounds
-        canAdvance = true;
-      }
-
-      if (canAdvance) {
-        el.classList.add('highlight');
-        el.onclick = ()=>{
-          if (ns > L && !pc.carrying) {
-            // Non-carrying piece at top step - give player choice between swoop and move down
-            if (pc.step === L) {
-              const canMoveDown = canTopStepMoveDown(pc);
-              const canSwoop = canTopStepFreeSwoop(pc);
-
-              if (canMoveDown || canSwoop) {
-                // Set up choice mode for tailwind top step options
-                mode = 'tailwindTopStepChoice';
-                tailwindPiece = pc;
-                tailwindOptions = [];
-                if (canMoveDown) tailwindOptions.push('move_down');
-                if (canSwoop) tailwindOptions.push('swoop');
-
-                clearHighlights();
-                showTailwindTopStepChoice();
-                return;
-              } else {
-                // No options available, remove piece
-                const index = opp.pieces.indexOf(pc);
-                if (index > -1) opp.pieces.splice(index, 1);
-              }
-            } else {
-              // Remove piece that advances beyond final step
-              const index = opp.pieces.indexOf(pc);
-              if (index > -1) opp.pieces.splice(index, 1);
-            }
-          } else if (ns >= 1 && ns <= L) {
-            // Normal advancement with push
-            performMoveWithPush(pc, {r: pc.r, step: ns});
-          }
-          finishTailwind();
-        };
-        hasOption=true;
-      }
-    }
-    if(opp.pieces.length < 5){
-      for(let r=0;r<rows;r++){
-        const base = locate(r, 1);
-        if(base && !occupied(r, 1)){
-          base.classList.add('highlight'); base.onclick = ()=>{
-            opp.pieces.push({r, step:1, carrying:false, active:false});
-            finishTailwind();
-          }; hasOption=true;
-        }
-      }
-    }
-  } else {
-    statusEl.textContent = `${players[oppIndex].name} Tailwind: click a base (step 1) to spawn a piece.`;
-    for(let r=0;r<rows;r++){
-      const base = locate(r, 1);
-      if(base && !occupied(r, 1)){
-        base.classList.add('highlight'); base.onclick = ()=>{
-          opp.pieces.push({r, step:1, carrying:false, active:false});
-          finishTailwind();
-        }; hasOption=true;
-      }
-    }
-  }
-  if(!hasOption) finishTailwind();
-  function finishTailwind(){
-    clearHighlights(); mode='preroll'; render(); statusEl.textContent = `${players[current].name}: Roll or Bank.`;
-  }
-}
-
-function showTailwindTopStepChoice(){
-  const oppIndex = 1-current;
-  statusEl.innerHTML = `
-    ${players[oppIndex].name} Tailwind: Choose action for piece at top step:<br>
-    ${tailwindOptions.includes('move_down') ? '<button onclick="handleTailwindTopStepChoice(\'move_down\')">⬇️ Move Down</button>' : ''}
-    ${tailwindOptions.includes('swoop') ? '<button onclick="handleTailwindTopStepChoice(\'swoop\')">🔄 Swoop</button>' : ''}
-  `;
-}
-
-function handleTailwindTopStepChoice(action){
-  if(mode !== 'tailwindTopStepChoice' || !tailwindPiece) return;
-
-  const oppIndex = 1-current;
-  const opp = players[oppIndex];
-
-  // Find the actual piece in the opponent's pieces array
-  const actualPiece = opp.pieces.find(p => p.r === tailwindPiece.r && p.step === tailwindPiece.step);
-
-  if (!actualPiece) {
-    finishTailwind();
-    return;
-  }
-
-  if (action === 'move_down') {
-    const L = lanes[actualPiece.r].L;
-    const downStep = L - 1;
-    if (downStep >= 1) {
-      performMoveWithPush(actualPiece, {r: actualPiece.r, step: downStep});
-      toast(`Moved down to step ${downStep}`);
-    }
-  } else if (action === 'swoop') {
-    const targets = potentialTopStepSwoops(actualPiece);
-    if (targets.length === 1) {
-      // Auto-select single target
-      const target = targets[0];
-      performMoveWithPush(actualPiece, target, true); // isSwoop = true
-      toast(`Swooped to lane ${lanes[target.r].sum}!`);
-    } else if (targets.length > 1) {
-      // Let player choose swoop target
-      mode = 'tailwindChooseSwoop';
-      tailwindSwoopTargets = targets;
-      showTailwindSwoopChoice();
-      return;
-    }
-  }
-
-  // Clear tailwind state and finish
-  mode = null;
-  tailwindPiece = null;
-  tailwindOptions = null;
-  tailwindSwoopTargets = null;
-  finishTailwind();
-}
-
-function showTailwindSwoopChoice(){
-  const oppIndex = 1-current;
-  statusEl.textContent = `${players[oppIndex].name}: Choose swoop destination.`;
-
-  // Highlight swoop targets
-  for(const target of tailwindSwoopTargets){
-    const el = locate(target.r, target.step);
-    if(el){
-      el.classList.add('highlight');
-      el.onclick = () => handleTailwindSwoopChoice(target);
-    }
-  }
-}
-
-function handleTailwindSwoopChoice(target){
-  if(mode !== 'tailwindChooseSwoop' || !tailwindPiece) return;
-
-  const oppIndex = 1-current;
-  const opp = players[oppIndex];
-
-  // Find the actual piece in the opponent's pieces array
-  const actualPiece = opp.pieces.find(p => p.r === tailwindPiece.r && p.step === tailwindPiece.step);
-
-  if (actualPiece) {
-    performMoveWithPush(actualPiece, target, true); // isSwoop = true
-    toast(`Swooped to lane ${lanes[target.r].sum}!`);
-  }
-
-  // Clear tailwind state and finish
-  mode = null;
-  tailwindPiece = null;
-  tailwindOptions = null;
-  tailwindSwoopTargets = null;
-  finishTailwind();
-}
 
 /* ---------- End turn logic ---------- */
 function resolveDeterrents(pl){
@@ -1494,7 +1430,8 @@ function bank(){
   pl.pieces.forEach(p=>p.active=false);
 
   // Earn a swoop token on Bank (not on Bust)
-  pl.swoopTokens = (pl.swoopTokens||0) + 1;
+  pl.swoopTokens = Math.min(2, (pl.swoopTokens||0) + 1);
+  enforceTokenPolicy(players, playerCount);
   renderScores();
 
   // Check for victory after delivery
@@ -1523,6 +1460,8 @@ function bust(){
   resolveDeterrents(pl);
   pl.pieces.forEach(p=>p.active=false);
 
+  enforceTokenPolicy(players, playerCount);
+
   // Check for victory after bust (in case any deliveries occurred)
   if(checkVictory()) return;
 
@@ -1533,28 +1472,47 @@ function bust(){
 function getState(){
   return {
     version: 'v6.0',
-    players: players.map(p=>({name:p.name, score:p.score, swoopTokens: p.swoopTokens||0, pieces:p.pieces.map(x=>({...x}))})),
+    playerCount,
+    players: players.map(p=>({
+      name: p.name,
+      profile: p.profile,
+      score: p.score,
+      swoopTokens: p.swoopTokens||0,
+      pieces: p.pieces.map(x=>({...x}))
+    })),
     current,
     mode,
-    rolled: rolled ? {d:[...rolled.d], pairs:[...rolled.pairs]} : null,
+    rolled: rolled ? {d:[...rolled.d], pairs: rolled.pairs ? [...rolled.pairs] : null} : null,
     selectedPair: selectedPair ? {...selectedPair} : null
   };
 }
 function setState(state){
   try{
-    players[0].score = state.players[0].score;
-    players[1].score = state.players[1].score;
-    players[0].swoopTokens = (state.players[0].swoopTokens||0);
-    players[1].swoopTokens = (state.players[1].swoopTokens||0);
-    players[0].pieces = state.players[0].pieces || [];
-    players[1].pieces = state.players[1].pieces || [];
-    current = (state.current===0 || state.current===1) ? state.current : 0;
+    const count = normalizePlayerCount(state.playerCount || (state.players?.length || MIN_PLAYERS));
+    playerCount = count;
+    const basePlayers = buildPlayers(playerCount);
+    const rawPlayers = Array.isArray(state.players) ? state.players : [];
+    players = basePlayers.map((base, idx) => {
+      const raw = rawPlayers[idx] || {};
+      return {
+        ...base,
+        name: raw.name || base.name,
+        profile: raw.profile || base.profile,
+        score: raw.score || 0,
+        swoopTokens: raw.swoopTokens ?? base.swoopTokens,
+        pieces: Array.isArray(raw.pieces) ? raw.pieces.map(x=>({...x})) : []
+      };
+    });
+    enforceTokenPolicy(players, playerCount);
+
+    current = Number.isInteger(state.current) ? ((state.current % playerCount) + playerCount) % playerCount : 0;
     mode = state.mode || 'preroll';
-    rolled = state.rolled ? {d:[...state.rolled.d], pairs:[...state.rolled.pairs]} : null;
+    rolled = state.rolled ? { d:[...state.rolled.d], pairs: state.rolled.pairs ? [...state.rolled.pairs] : null } : null;
     selectedPair = state.selectedPair || null;
     renderDiceAndPairs();
     render();
     statusEl.textContent = `Loaded game. ${players[current].name}'s turn.`;
+    pendingPlayerCount = playerCount;
   }catch(e){
     console.error(e); toast('Invalid state.'); 
   }
@@ -1598,13 +1556,14 @@ function createBugTestScenario(){
   // Load the exact game state from the saved file to reproduce the bug
   const savedState = {
     "version": "v6.0",
+    "playerCount": 2,
     "players": [
       {
         "name": "Monkeys",
         "pieceIcon": "🐒",
         "activeIcon": "🐵",
         "score": 0,
-        "swoopTokens": 1,
+        "swoopTokens": 0,
         "pieces": [
           {
             "r": 4,
@@ -1739,7 +1698,18 @@ bankBtn.onclick = ()=>{
     }
   }
 };
-newBtn.onclick = startGame;
+playerCountButtons.forEach(btn => {
+  btn.addEventListener('click', () => {
+    pendingPlayerCount = Number(btn.dataset.count);
+    updatePlayerCountButtons();
+  });
+});
+cancelNewGame.onclick = closeNewGameModal;
+confirmNewGame.onclick = () => {
+  closeNewGameModal();
+  startGame(pendingPlayerCount);
+};
+newBtn.onclick = openNewGameModal;
 saveBtn.onclick = saveToFile;
 loadBtn.onclick = openLoadModal;
 qsaveBtn.onclick = quickSave;
@@ -1755,6 +1725,7 @@ undoBtn.onclick = ()=>{
 };
 
 /* ---------- Kickoff ---------- */
+updatePlayerCountButtons();
 startGame();
 </script>
 </body>

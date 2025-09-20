@@ -111,7 +111,6 @@ async function main() {
       await page.click('#bankBtn');
       actionsThisTurn = 0;
       turnIndex += 1;
-      await handleTailwindIfAny();
       await page.waitForTimeout(TURN_PAUSE);
       return true;
     }
@@ -120,53 +119,12 @@ async function main() {
       await page.click('#bankBtn');
       actionsThisTurn = 0;
       turnIndex += 1;
-      await handleTailwindIfAny();
       await page.waitForTimeout(TURN_PAUSE);
       return true;
     }
     return false;
   }
 
-  async function handleTailwindIfAny() {
-    // Tailwind phases change the status content; respond if they appear
-    for (let i = 0; i < 40; i++) {
-      const s = (await statusText()) || '';
-      if (!/Tailwind/.test(s)) break;
-      const modeVal = await page.evaluate(() => mode);
-      if (modeVal === 'tailwindTopStepChoice') {
-        // prefer Move Down button if present, else Swoop
-        const hasMoveDown = await page.locator('text=Move Down').first().isVisible().catch(() => false);
-        if (hasMoveDown) {
-          push({ type: 'tailwind_choice', action: 'move_down' });
-          await page.click('text=Move Down');
-        } else {
-          push({ type: 'tailwind_choice', action: 'swoop' });
-          await page.click('text=Swoop');
-        }
-      } else if (modeVal === 'tailwindChooseSwoop') {
-        // click any highlighted target
-        const targets = page.locator('.cell.highlight');
-        const n = await targets.count();
-        if (n > 0) {
-          push({ type: 'tailwind_swoop_target' });
-          await targets.first().click();
-        } else {
-          break;
-        }
-      } else if (modeVal === 'tailwind') {
-        // advance any highlighted piece; otherwise spawn at a highlighted base
-        const highlights = page.locator('.cell.highlight');
-        const n = await highlights.count();
-        if (n > 0) {
-          push({ type: 'tailwind', pick: 'first_highlight' });
-          await highlights.first().click();
-        } else {
-          break;
-        }
-      }
-      await page.waitForTimeout(50);
-    }
-  }
 
   async function pickPairAndMove(state) {
     const pl = state.players[state.current];
@@ -283,7 +241,6 @@ async function main() {
       push({ type: 'bust' });
       actionsThisTurn = 0;
       turnIndex += 1;
-      await handleTailwindIfAny();
       await page.waitForTimeout(TURN_PAUSE);
       return true;
     }
@@ -327,7 +284,6 @@ async function main() {
     }
 
     // handle any chooser modes opportunistically
-    await handleTailwindIfAny();
     await page.waitForTimeout(20);
   }
 

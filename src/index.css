@@ -59,6 +59,7 @@ body {
   display: flex;
   gap: 12px;
   margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 .mobile-score {
@@ -378,6 +379,36 @@ body {
   position: relative;
   font-size: 1rem;
   line-height: 1;
+}
+
+.swoop-piece[data-player="2"],
+.swoop-piece[data-player="3"] {
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.swoop-piece[data-player="2"] {
+  background-image: url('/RnD/crab_inactive1.png');
+}
+
+.swoop-piece[data-player="2"].active,
+.swoop-piece[data-player="2"].carry {
+  background-image: url('/RnD/crab_active1.png');
+}
+
+.swoop-piece[data-player="3"] {
+  background-image: url('/RnD/turtle_inactive1.png');
+}
+
+.swoop-piece[data-player="3"].active,
+.swoop-piece[data-player="3"].carry {
+  background-image: url('/RnD/turtle_active1.png');
+}
+
+.swoop-piece[data-player="2"] > span,
+.swoop-piece[data-player="3"] > span {
+  display: none;
 }
 
 .swoop-piece.active {

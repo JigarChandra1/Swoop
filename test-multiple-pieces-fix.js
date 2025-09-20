@@ -17,9 +17,9 @@ const LANES = [
   { sum: 12, L: 2, basket: true }
 ];
 
-function occupied(game, r, side, step) {
+function occupied(game, r, step) {
   for (const pl of game.players) {
-    if (pl.pieces.some((pc) => pc.r === r && pc.side === side && pc.step === step)) return true;
+    if (pl.pieces.some((pc) => pc.r === r && pc.step === step)) return true;
   }
   return false;
 }
@@ -36,7 +36,7 @@ function canTopStepMoveDown(game, pc) {
   const L = LANES[pc.r].L;
   if (pc.step !== L) return false;
   const downStep = L - 1;
-  return downStep >= 1 && !occupied(game, pc.r, pc.side, downStep);
+  return downStep >= 1 && !occupied(game, pc.r, downStep);
 }
 
 function canTopStepFreeSwoop(game, pc) {
@@ -72,7 +72,7 @@ function canMoveOnSum(game, pl, sum) {
         // Normal movement check
         const dir = pc.carrying ? -1 : +1;
         const ns = pc.step + dir;
-        if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
+        if (ns >= 1 && ns <= L && !occupied(game, pc.r, ns)) {
           return true;
         }
       }
@@ -92,7 +92,7 @@ function canMoveOnSum(game, pl, sum) {
           // Normal movement check (after potential activation)
           const dir = pc.carrying ? -1 : +1;
           const ns = pc.step + dir;
-          if (ns >= 1 && ns <= L && !occupied(game, pc.r, pc.side, ns)) {
+          if (ns >= 1 && ns <= L && !occupied(game, pc.r, ns)) {
             return true;
           }
         }
@@ -102,7 +102,7 @@ function canMoveOnSum(game, pl, sum) {
     return false;
   } else {
     // No pieces on route - check if we can spawn a new piece
-    return pl.pieces.length < 5 && !occupied(game, r, pl.side, 1) && activeCount(pl) < 2;
+    return pl.pieces.length < 5 && !occupied(game, r, 1) && activeCount(pl) < 2;
   }
 }
 
@@ -115,25 +115,21 @@ function testMultiplePiecesScenario() {
     players: [
       {
         name: "Monkeys",
-        side: "L",
         pieces: [
           {
             r: 5,  // Route with sum 7
-            side: "L",
             step: 4,
             carrying: false,
             active: false
           },
           {
             r: 5,  // Same route with sum 7
-            side: "L", 
             step: 5,
             carrying: false,
             active: true  // This piece should be able to move
           },
           {
             r: 3,
-            side: "L",
             step: 1,
             carrying: false,
             active: true
@@ -142,18 +138,15 @@ function testMultiplePiecesScenario() {
       },
       {
         name: "Seagulls",
-        side: "R",
         pieces: [
           {
             r: 5,
-            side: "R",
             step: 4,
             carrying: false,
             active: false
           },
           {
             r: 3,
-            side: "R",
             step: 5,
             carrying: false,
             active: false
@@ -211,25 +204,21 @@ function testSavedGameState() {
         "pieceIcon": "🐒",
         "activeIcon": "🐵",
         "score": 0,
-        "side": "L",
         "pieces": [
           {
             "r": 5,
-            "side": "L",
             "step": 4,
             "carrying": false,
             "active": false
           },
           {
             "r": 5,
-            "side": "L",
             "step": 5,
             "carrying": false,
             "active": true
           },
           {
             "r": 3,
-            "side": "L",
             "step": 1,
             "carrying": false,
             "active": true
@@ -241,18 +230,15 @@ function testSavedGameState() {
         "pieceIcon": "🕊️",
         "activeIcon": "🦅",
         "score": 0,
-        "side": "R",
         "pieces": [
           {
             "r": 5,
-            "side": "R",
             "step": 4,
             "carrying": false,
             "active": false
           },
           {
             "r": 3,
-            "side": "R",
             "step": 5,
             "carrying": false,
             "active": false
@@ -288,12 +274,12 @@ function testSavedGameState() {
     const L = LANES[5].L; // Route 5 has L = 12
     const dir = activePiece.carrying ? -1 : +1;
     const nextStep = activePiece.step + dir;
-    const canMoveDirectly = nextStep >= 1 && nextStep <= L && !occupied(savedState, activePiece.r, activePiece.side, nextStep);
+    const canMoveDirectly = nextStep >= 1 && nextStep <= L && !occupied(savedState, activePiece.r, nextStep);
 
     console.log(`\nActive piece at step ${activePiece.step}:`);
     console.log(`  Next step would be: ${nextStep}`);
     console.log(`  Route length (L): ${L}`);
-    console.log(`  Is next step occupied: ${occupied(savedState, activePiece.r, activePiece.side, nextStep)}`);
+    console.log(`  Is next step occupied: ${occupied(savedState, activePiece.r, nextStep)}`);
     console.log(`  Can move directly: ${canMoveDirectly}`);
   }
 
