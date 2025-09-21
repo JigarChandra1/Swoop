@@ -1,5 +1,6 @@
 import React from 'react';
 import { createRoom as mpCreateRoom, joinRoom as mpJoinRoom, getState as mpGetState, pushState as mpPushState, subscribe as mpSubscribe, saveCreds as mpSaveCreds, loadCreds as mpLoadCreds } from './net/multiplayer.js';
+import { createBot as createBotByKey, createProBot, createPusherBot, makeRng } from './bots/proBot.js';
 // Sound effects removed
 
 const MIN_PLAYERS = 2;
@@ -12,26 +13,40 @@ const PLAYER_PROFILES = [
   { key: 'turtles', defaultName: 'Turtles', badgeIcon: '🐢', pieceIcon: '🐢', activeIcon: '🐢' }
 ];
 
+const DEFAULT_BOT_TYPE = 'pro';
+const BOT_TYPE_SEQUENCE = [DEFAULT_BOT_TYPE, 'pusher'];
+const BOT_TYPE_LABEL = {
+  pro: 'Pro',
+  pusher: 'Pusher'
+};
+
 function normalizePlayerCount(count) {
   const n = Number(count);
   if (!Number.isFinite(n)) return MIN_PLAYERS;
   return Math.min(MAX_PLAYERS, Math.max(MIN_PLAYERS, Math.round(n)));
 }
 
-function buildPlayers(playerCount) {
+function buildPlayers(playerCount, options = {}) {
   const count = normalizePlayerCount(playerCount);
   const profiles = PLAYER_PROFILES.slice(0, count);
-  return profiles.map((profile, idx) => ({
-    id: idx,
-    profile: profile.key,
-    name: profile.defaultName,
-    badgeIcon: profile.badgeIcon,
-    pieceIcon: profile.pieceIcon,
-    activeIcon: profile.activeIcon,
-    score: 0,
-    swoopTokens: idx === count - 1 ? 1 : 0,
-    pieces: []
-  }));
+  const { botSeats = [], botTypes = [] } = options;
+  return profiles.map((profile, idx) => {
+    const isBot = !!botSeats[idx];
+    const botType = botTypes[idx] || (isBot ? DEFAULT_BOT_TYPE : null);
+    return {
+      id: idx,
+      profile: profile.key,
+      name: profile.defaultName,
+      badgeIcon: profile.badgeIcon,
+      pieceIcon: profile.pieceIcon,
+      activeIcon: profile.activeIcon,
+      score: 0,
+      swoopTokens: idx === count - 1 ? 1 : 0,
+      pieces: [],
+      isBot,
+      botType
+    };
+  });
 }
 
 function enforceTokenPolicy(players, _playerCount) {
@@ -123,7 +138,7 @@ function stepForSpace(r, space) {
   return bestStep;
 }
 
-function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); out.push(L); return [...new Set(out)].filter(x=>x>=1&&x<=L); }
+function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); return [...new Set(out)].filter(x=>x>=1&&x<L); }
 function deterrents(L,sum){ if(L<=3) return []; const det=[3,L-2]; if((sum===6||sum===8)&&L>=5) det.push(5); const cps=checkpoints(L); return [...new Set(det)].filter(x=>x>=1&&x<=L && !cps.includes(x)); }
 const oddSlope={3:+1,5:-1,7:-1,9:-1,11:+1};
 
@@ -150,9 +165,9 @@ function colForStep(side, step, L) {
   return RIGHT_END_COL - rel;
 }
 
-function initialGame(playerCount = MIN_PLAYERS){
+function initialGame(playerCount = MIN_PLAYERS, options = {}){
   const count = normalizePlayerCount(playerCount);
-  const players = buildPlayers(count);
+  const players = buildPlayers(count, options);
   enforceTokenPolicy(players, count);
   return {
     playerCount: count,
@@ -169,7 +184,9 @@ function initialGame(playerCount = MIN_PLAYERS){
     transferTargets: null,
     pieceChoices: null,
     selectedSum: null,
-    previousMode: null
+    previousMode: null,
+    // Persisted event log (new): newest first
+    events: []
   };
 }
 
@@ -183,10 +200,108 @@ export default function App(){
   const [showCover, setShowCover] = React.useState(true);
   const [showNewGameModal, setShowNewGameModal] = React.useState(false);
   const [pendingPlayerCount, setPendingPlayerCount] = React.useState(game.playerCount);
+  const [pendingBotSeats, setPendingBotSeats] = React.useState(() => {
+    const seats = Array(MAX_PLAYERS).fill(false);
+    game.players.forEach((p, idx) => { if (idx < seats.length) seats[idx] = !!p.isBot; });
+    return seats;
+  });
+  const [pendingBotTypes, setPendingBotTypes] = React.useState(() => {
+    const types = Array(MAX_PLAYERS).fill(null);
+    game.players.forEach((p, idx) => {
+      if (idx < types.length) types[idx] = p.botType || (p.isBot ? DEFAULT_BOT_TYPE : null);
+    });
+    return types;
+  });
   // AAA skin support: grid + tile refs for connector overlay
   const gridRef = React.useRef(null);
   const tileRefs = React.useRef({});
-  const [roomVisible, setRoomVisible] = React.useState(false);
+  // Events are now stored in game state for persistence and MP sync
+  const events = game?.events || [];
+  const [isMobile, setIsMobile] = React.useState(() => {
+    if (typeof window === 'undefined') return false;
+    return window.matchMedia('(max-width: 768px)').matches;
+  });
+  const [logVisible, setLogVisible] = React.useState(() => {
+    if (typeof window === 'undefined') return true;
+    return !window.matchMedia('(max-width: 768px)').matches;
+  });
+  // Event log pagination (show 5 at a time)
+  const [eventPage, setEventPage] = React.useState(0); // 0 = newest 0-4
+
+  const MAX_EVENT_ROWS = 5;
+  const MAX_EVENT_HISTORY = 20;
+
+  function snapshotBotPreferences(players) {
+    const seats = Array(MAX_PLAYERS).fill(false);
+    const types = Array(MAX_PLAYERS).fill(null);
+    players.forEach((p, idx) => {
+      if (idx >= MAX_PLAYERS) return;
+      seats[idx] = !!p.isBot;
+      types[idx] = p.botType || (p.isBot ? DEFAULT_BOT_TYPE : null);
+    });
+    return { seats, types };
+  }
+
+  function formatCell(r, step) {
+    const lane = LANES[r];
+    if (!lane) return `r${r + 1}-s${step}`;
+    return `${lane.sum} / ${step}`;
+  }
+
+  function findPieceOwner(gameState, piece) {
+    for (let i = 0; i < gameState.players.length; i++) {
+      if (gameState.players[i].pieces.includes(piece)) {
+        return { player: gameState.players[i], seat: i, name: gameState.players[i].name };
+      }
+    }
+    return null;
+  }
+
+  function recordEvent(message, playerName = null, targetGame = null) {
+    const ts = new Date();
+    const sourceGame = targetGame || game;
+    let playerStats = '';
+
+    if (playerName && sourceGame && Array.isArray(sourceGame.players)) {
+      const player = sourceGame.players.find(p => p.name === playerName);
+      if (player) {
+        playerStats = `${player.swoopTokens || 0}🪙`;
+      }
+    }
+
+    const entry = {
+      id: `${ts.getTime()}-${Math.random().toString(16).slice(2)}`,
+      message,
+      playerStats
+    };
+
+    const injectEntry = (state) => {
+      const prevEvents = Array.isArray(state?.events) ? state.events : [];
+      return [entry, ...prevEvents].slice(0, MAX_EVENT_HISTORY);
+    };
+
+    if (targetGame) {
+      targetGame.events = injectEntry(targetGame);
+      return entry;
+    }
+
+    setGame(prev => ({ ...prev, events: injectEntry(prev) }));
+    return entry;
+  }
+
+  // When the events list changes (newest first), reset to the newest page
+  React.useEffect(() => {
+    setEventPage(0);
+  }, [events.length]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(max-width: 768px)');
+    const handleChange = () => setIsMobile(mq.matches);
+    handleChange();
+    mq.addEventListener('change', handleChange);
+    return () => mq.removeEventListener('change', handleChange);
+  }, []);
 
   // Multiplayer state
   const [mp, setMp] = React.useState({ connected:false, code:'', version:null, playerId:null, token:null, seat:null, joining:false, error:null });
@@ -202,6 +317,17 @@ export default function App(){
   const gameModeRef = React.useRef('preroll');
   React.useEffect(() => { gameModeRef.current = game.mode; }, [game.mode]);
   React.useEffect(() => { setPendingPlayerCount(game.playerCount); }, [game.playerCount]);
+  React.useEffect(() => {
+    const { seats, types } = snapshotBotPreferences(game.players);
+    setPendingBotSeats(seats);
+    setPendingBotTypes(types);
+  }, [game.players]);
+
+  const botAgentsRef = React.useRef({});
+  const botPlanRef = React.useRef(null);
+  const botProcessingRef = React.useRef(false);
+  const botLastSeatRef = React.useRef(game.current);
+  const botLastRollRef = React.useRef(null);
 
   function seatLabel(seat) {
     if (!(seat >= 0 && seat < game.playerCount)) return 'Spectator';
@@ -242,7 +368,7 @@ export default function App(){
       prevSnapshotRef.current = currJson;
     }
 
-    try { localStorage.setItem('SWOOP_STATE_V60', currJson); } catch (e) {}
+    try { localStorage.setItem('SWOOP_STATE_V61', currJson); } catch (e) {}
     // Multiplayer: debounce push of state when connected and not applying remote
     if (mp.connected && mp.playerId && !mpApplyingRef.current) {
       // Always attempt to push; server enforces turn ownership based on its pre-update state.
@@ -399,6 +525,352 @@ export default function App(){
     setMpPreferredSeat('');
   }
 
+  function initTurnStats(){
+    return { actionsThisTurn: 0, moves: 0, swoops: 0, busts: 0, deliveredThisTurn: 0, rolls: 0 };
+  }
+
+  function instantiateBotForType(type, rng){
+    const key = type || DEFAULT_BOT_TYPE;
+    if(key === 'pusher') return createPusherBot(rng);
+    if(key === DEFAULT_BOT_TYPE) return createProBot(rng);
+    return createBotByKey(key, rng);
+  }
+
+  function ensureBotRuntime(seat){
+    const player = game.players[seat];
+    const desiredType = player?.botType || DEFAULT_BOT_TYPE;
+    let runtime = botAgentsRef.current[seat];
+    if(!runtime){
+      const rng = makeRng((Date.now() + seat * 9973) >>> 0);
+      runtime = {
+        bot: instantiateBotForType(desiredType, rng),
+        rng,
+        turnStats: initTurnStats(),
+        turnActive: false,
+        startScore: 0,
+        botType: desiredType
+      };
+      botAgentsRef.current[seat] = runtime;
+      return runtime;
+    }
+
+    if(runtime.botType !== desiredType){
+      runtime.bot = instantiateBotForType(desiredType, runtime.rng);
+      runtime.turnStats = initTurnStats();
+      runtime.turnActive = false;
+      runtime.startScore = 0;
+      runtime.botType = desiredType;
+    } else if(!runtime.turnStats){
+      runtime.turnStats = initTurnStats();
+    }
+    return runtime;
+  }
+
+  function resetBotRuntime(seat){
+    const runtime = botAgentsRef.current[seat];
+    if(runtime){
+      runtime.turnActive = false;
+      runtime.turnStats = initTurnStats();
+      runtime.startScore = 0;
+    }
+  }
+
+  function makeBotSnapshot(){
+    return {
+      playerCount: game.playerCount,
+      current: game.current,
+      baskets: [...game.baskets],
+      moveHistory: [],
+      players: game.players.map(pl => ({
+        score: pl.score,
+        swoopTokens: pl.swoopTokens || 0,
+        pieces: pl.pieces.map((pc, idx) => ({ ...pc, _index: idx }))
+      }))
+    };
+  }
+
+  function applyBotTransfer(runtime, turnStats){
+    if(!runtime.bot.shouldTransfer) return false;
+    const snapshot = makeBotSnapshot();
+    const decision = runtime.bot.shouldTransfer(turnStats, runtime.rng, snapshot);
+    if(!decision || !decision.source || !decision.target) return false;
+    const seat = game.current;
+    const pl = game.players[seat];
+    if(!pl) return false;
+    const sourceIdx = typeof decision.source._index === 'number' ? decision.source._index : pl.pieces.findIndex(p => p.carrying);
+    const targetIdx = typeof decision.target._index === 'number' ? decision.target._index : pl.pieces.findIndex(p => !p.carrying && p.r === decision.target.r && p.step === decision.target.step);
+    if(sourceIdx < 0 || targetIdx < 0) return false;
+    const newGame = {...game};
+    const actor = newGame.players[newGame.current];
+    const sourcePiece = actor.pieces[sourceIdx];
+    const targetPiece = actor.pieces[targetIdx];
+    if(!sourcePiece || !sourcePiece.carrying || !targetPiece || targetPiece.carrying) return false;
+    const fromCell = formatCell(sourcePiece.r, sourcePiece.step);
+    const toCell = formatCell(targetPiece.r, targetPiece.step);
+    sourcePiece.carrying = false;
+    targetPiece.carrying = true;
+    newGame.message = `${actor.name}: Roll or Bank.`;
+    setGame(newGame);
+    showToast('Basket transferred!');
+    recordEvent(`${actor.name} transferred a basket from ${fromCell} to ${toCell}`, actor.name);
+    runtime.turnStats.actionsThisTurn += 1;
+    return true;
+  }
+
+  function applyBotBank(runtime, turnStats){
+    const rollCount = turnStats.rolls || 0;
+    const didAnything = rollCount > 0 || turnStats.actionsThisTurn > 0 || turnStats.moves > 0 || turnStats.swoops > 0;
+    if(!didAnything) return false;
+    const snapshot = makeBotSnapshot();
+    if(runtime.bot.shouldBank(turnStats, runtime.rng, snapshot)){
+      botPlanRef.current = null;
+      bank();
+      runtime.turnStats = initTurnStats();
+      runtime.turnActive = false;
+      return true;
+    }
+    return false;
+  }
+
+  function handleBotMoveDecision(runtime, decision){
+    if(!decision || decision.type !== 'move') return false;
+    const plan = decision.plan || {};
+    const seat = game.current;
+    const pl = game.players[seat];
+    if(!pl) return false;
+    let direction = 'up';
+    let pieceIndex = typeof plan.pieceIndex === 'number' ? plan.pieceIndex : null;
+    if(plan.spawn){
+      direction = 'up';
+    } else if(pieceIndex !== null){
+      const piece = pl.pieces[pieceIndex];
+      if(piece){
+        if(plan.action === 'move_down'){
+          direction = 'down';
+        } else if(plan.action === 'top_swoop' && plan.target){
+          direction = plan.target.r > piece.r ? 'right' : 'left';
+        } else if(plan.action === 'move' && plan.target){
+          if(plan.target.r === piece.r){
+            direction = plan.target.step > piece.step ? 'up' : 'down';
+          } else {
+            direction = plan.target.r > piece.r ? 'right' : 'left';
+          }
+        } else if(plan.target && plan.target.r !== piece.r){
+          direction = plan.target.r > piece.r ? 'right' : 'left';
+        }
+      }
+    }
+    botPlanRef.current = { seat, sum: decision.sum, plan, pieceIndex };
+    quickMove(decision.sum, direction);
+    runtime.turnStats.actionsThisTurn += 1;
+    runtime.turnStats.moves += 1;
+    return true;
+  }
+
+  function handleBotSwoopDecision(runtime, decision){
+    if(!decision || decision.type !== 'swoop') return false;
+    const seat = game.current;
+    const pl = game.players[seat];
+    if(!pl || (pl.swoopTokens || 0) <= 0) return false;
+    const pieceIndex = typeof decision.pcIndex === 'number' ? decision.pcIndex : (decision.plan && typeof decision.plan.pieceIndex === 'number' ? decision.plan.pieceIndex : null);
+    const target = decision.target || (decision.plan && decision.plan.target);
+    if(pieceIndex === null || !target) return false;
+    const newGame = {...game, baskets: [...game.baskets]};
+    const actor = newGame.players[newGame.current];
+    const piece = actor.pieces[pieceIndex];
+    if(!piece) return false;
+    if(actor.swoopTokens > 0) actor.swoopTokens = Math.max(0, (actor.swoopTokens || 0) - 1);
+    performMoveWithPush(piece, target, newGame, true);
+    newGame.rolled = null;
+    newGame.selectedPair = null;
+    newGame.pendingAdvances = null;
+    newGame.mode = 'preroll';
+    newGame.message = `${actor.name}: Roll or Bank.`;
+    setGame(newGame);
+    const destLabel = formatCell(target.r, target.step);
+    showToast(`${actor.name} swooped to ${destLabel}.`);
+    recordEvent(`${actor.name} spent a swoop token and swooped to ${destLabel}. Tokens left: ${actor.swoopTokens || 0}.`, actor.name);
+    runtime.turnStats.actionsThisTurn += 1;
+    runtime.turnStats.swoops += 1;
+    botPlanRef.current = null;
+    return true;
+  }
+
+  function handleBotChoosePiece(){
+    if(!game.pieceChoices || game.pieceChoices.length === 0) return false;
+    const plan = botPlanRef.current;
+    const seat = game.current;
+    let targetPiece = null;
+    if(plan && plan.seat === seat && typeof plan.pieceIndex === 'number'){
+      targetPiece = game.players[seat]?.pieces[plan.pieceIndex];
+    }
+    if(!targetPiece){
+      targetPiece = game.pieceChoices[0];
+    }
+    if(targetPiece){
+      selectPieceForMove(targetPiece);
+      return true;
+    }
+    return false;
+  }
+
+  function handleBotChooseMoveDest(){
+    const plan = botPlanRef.current;
+    if(plan && plan.plan && plan.plan.target){
+      const target = plan.plan.target;
+      handleTileClick(target.r, target.step, null);
+    } else if(game.moveTargets && game.moveTargets.length > 0){
+      const target = game.moveTargets[0];
+      handleTileClick(target.r, target.step, null);
+    }
+    botPlanRef.current = null;
+    return true;
+  }
+
+  function shouldProcessBot(){
+    if (showNewGameModal || showLoadModal) return false;
+    if (mp.connected) return false;
+    if (!mpCanAct()) return false;
+    const player = game.players[game.current];
+    if (!player || !player.isBot) return false;
+    if (game.mode === 'gameOver') return false;
+    return true;
+  }
+
+  function processBotStep(){
+    if(botProcessingRef.current) return;
+    if(!shouldProcessBot()) return;
+    botProcessingRef.current = true;
+    try {
+      const seat = game.current;
+      const player = game.players[seat];
+      if(!player) return;
+      const runtime = ensureBotRuntime(seat);
+      if(!runtime.turnActive){
+        runtime.turnActive = true;
+        runtime.turnStats = initTurnStats();
+        runtime.startScore = player.score;
+      }
+      const delivered = Math.max(0, player.score - runtime.startScore);
+      runtime.turnStats.deliveredThisTurn = delivered;
+      const turnStats = { ...runtime.turnStats, deliveredThisTurn: delivered };
+
+      if(game.mode === 'preroll' && !game.rolled){
+        if(applyBotTransfer(runtime, turnStats)) return;
+        if(applyBotBank(runtime, turnStats)) return;
+        botPlanRef.current = null;
+        runtime.turnStats.rolls = (runtime.turnStats.rolls || 0) + 1;
+        roll();
+        return;
+      }
+
+      if(game.mode === 'rolled' || game.mode === 'pairChosen'){
+        const dice = game.rolled?.d;
+        if(!dice || dice.length !== 4){
+          bust();
+          runtime.turnStats.actionsThisTurn += 1;
+          runtime.turnStats.busts += 1;
+          runtime.turnActive = false;
+          botPlanRef.current = null;
+          return;
+        }
+        const pairs = [];
+        for(let i=0;i<dice.length;i++){
+          for(let j=i+1;j<dice.length;j++){
+            pairs.push({ i, j, sum: dice[i] + dice[j] });
+          }
+        }
+        const allowed = (game.mode === 'pairChosen' && game.pendingAdvances && game.pendingAdvances.length > 0) ? [game.pendingAdvances[0]] : allowedSumsForCurrentRoll();
+        const snapshot = makeBotSnapshot();
+        const decision = runtime.bot.chooseAction({ game: snapshot, rng: runtime.rng, roll: { d:[...dice], pairs }, allowedSums: allowed, turnStats: runtime.turnStats });
+        if(decision.type === 'swoop'){
+          if(handleBotSwoopDecision(runtime, decision)) return;
+        } else if(decision.type === 'move'){
+          if(handleBotMoveDecision(runtime, decision)) return;
+        } else if(decision.type === 'bust'){
+          botPlanRef.current = null;
+          bust();
+          runtime.turnStats.actionsThisTurn += 1;
+          runtime.turnStats.busts += 1;
+          runtime.turnActive = false;
+          return;
+        }
+        // If we reach here no move executed; fall back to bust to avoid stalls
+        botPlanRef.current = null;
+        bust();
+        runtime.turnStats.actionsThisTurn += 1;
+        runtime.turnStats.busts += 1;
+        runtime.turnActive = false;
+        return;
+      }
+
+      if(game.mode === 'choosePiece'){
+        if(handleBotChoosePiece()) return;
+      }
+
+      if(game.mode === 'chooseMoveDest'){
+        if(handleBotChooseMoveDest()) return;
+      }
+
+      if(game.mode === 'pickSwoopDest'){
+        const target = game.swoopTargets && game.swoopTargets[0];
+        if(target && game.swoopSource){
+          finalizeSwoop(game.swoopSource, target);
+          return;
+        }
+      }
+
+      if(game.mode === 'chooseTopStepSwoop'){
+        const target = game.topStepTargets && game.topStepTargets[0];
+        if(target){
+          chooseTopStepSwoopTarget(target);
+          return;
+        }
+      }
+
+    } finally {
+      botProcessingRef.current = false;
+    }
+  }
+
+  function handleBotPlay(){
+    processBotStep();
+  }
+
+  React.useEffect(() => {
+    Object.keys(botAgentsRef.current).forEach(key => {
+      const idx = Number(key);
+      const pl = game.players[idx];
+      if(!pl || !pl.isBot){
+        delete botAgentsRef.current[idx];
+      }
+    });
+  }, [game.players]);
+
+  React.useEffect(() => {
+    const prev = botLastSeatRef.current;
+    if(prev !== game.current){
+      resetBotRuntime(prev);
+      botPlanRef.current = null;
+      botLastSeatRef.current = game.current;
+    }
+  }, [game.current]);
+
+  React.useEffect(() => {
+    if (!game.rolled) {
+      botLastRollRef.current = null;
+      return;
+    }
+    const player = game.players[game.current];
+    if (!player || !player.isBot) return;
+    const dice = game.rolled.d;
+    if (!Array.isArray(dice)) return;
+    const key = `${game.current}:${dice.join('-')}`;
+    if (botLastRollRef.current === key) return;
+    botLastRollRef.current = key;
+    showToast(`${player.name} rolled ${dice.join(' ')}`);
+  }, [game.rolled, game.current, game.players]);
+
   function undo(){
     const hist = historyRef.current;
     if (!hist || hist.length === 0) { showToast('Nothing to undo.'); return; }
@@ -538,10 +1010,18 @@ export default function App(){
     if(!game.transferSource || !targetPiece) return;
 
     const newGame = {...game};
-    game.transferSource.carrying = false;
+    const sourcePiece = game.transferSource;
+    const fromCell = formatCell(sourcePiece.r, sourcePiece.step);
+    const toCell = formatCell(targetPiece.r, targetPiece.step);
+    sourcePiece.carrying = false;
     targetPiece.carrying = true;
 
     showToast(`Basket transferred!`);
+    recordEvent(
+      `${newGame.players[newGame.current].name} transferred a basket from ${fromCell} to ${toCell}`,
+      newGame.players[newGame.current].name,
+      newGame
+    );
 
     // Determine what mode to return to
     const previousMode = game.previousMode || 'preroll';
@@ -643,13 +1123,18 @@ export default function App(){
       if (canMoveOnSum(pl, a.sum) || canMoveOnSum(pl, b.sum)) { hasAnyMove = true; break; }
     }
 
+    const rollerName = game.players[game.current].name;
     if(!hasAnyMove){
-      newGame.message = `${game.players[game.current].name} rolled ${d.join(' ')} — no legal pairings. Spend a Swoop token or End Turn (Busted).`;
+      newGame.message = `${rollerName} rolled ${d.join(' ')} — no legal pairings. Spend a Swoop token or End Turn (Busted).`;
     } else {
-      newGame.message = `${game.players[game.current].name}: choose a pairing (advance both if possible).`;
+      newGame.message = `${rollerName} rolled ${d.join(' ')} — choose a pairing (advance both if possible).`;
     }
 
     setGame(newGame);
+    const roller = game.players[game.current];
+    if (roller) {
+      recordEvent(`${roller.name} rolled ${d.join(' ')}`, roller.name);
+    }
   }
 
   // Assess whether a lane can be advanced on this roll and what activation cost it requires (0 if moving an active piece, 1 if it would need to activate/spawn one first)
@@ -1320,18 +1805,14 @@ export default function App(){
     while(sp >= 1 && tileTypeAtSpace(r, sp) === 'Gap') sp--;
     return sp;
   }
-  function applyPushChain(origin, dest, newGame, pusher, _isSwoop = false){
-    // Compute push vector. Same-lane uses step delta; cross-lane uses geometric space delta.
+  function applyPushChain(origin, dest, newGame, pusher, isSwoop = false, rootPusher = pusher){
     const originSpace = mapStepToGrid(origin.r, origin.step);
     const destSpace   = mapStepToGrid(dest.r, dest.step);
     const dr = dest.r - origin.r;
     const dsSteps = dest.step - origin.step;
     const dSpace = destSpace - originSpace;
-    // If origin and destination are identical, no push vector
-    // Allow cross-lane pushes even when geometric space delta is 0 (e.g., top-step sideways),
-    // since the occupant should be displaced to the adjacent lane's matching space.
     if (dr===0 && dsSteps===0) return;
-    // find occupant at dest
+
     let occPi = -1, occPc = null;
     for(let pi=0; pi<newGame.players.length; pi++){
       const pl = newGame.players[pi];
@@ -1339,50 +1820,93 @@ export default function App(){
       if(pc){ occPi = pi; occPc = pc; break; }
     }
     if(!occPc) return;
+
+    const rootInfo = rootPusher ? findPieceOwner(newGame, rootPusher) : null;
+    const pushedOwner = occPi >= 0 ? newGame.players[occPi] : null;
+    const pushedName = pushedOwner ? pushedOwner.name : 'Opponent';
+    const fromCell = formatCell(dest.r, dest.step);
+
     const r2 = dest.r + dr;
     if(occPc.carrying && pusher && !pusher.carrying){
       pusher.carrying = true; occPc.carrying = false;
     }
     if(r2 < 0 || r2 >= LANES.length){
-      // remove
+      if (rootInfo) {
+        recordEvent(
+          `${rootInfo.name} pushed ${pushedName}'s piece off the board from ${fromCell}`,
+          rootInfo.name,
+          newGame
+        );
+      }
       const pl = newGame.players[occPi];
       pl.pieces = pl.pieces.filter(p=>p!==occPc);
       return;
     }
     let s2;
     if (dr === 0) {
-      // Same-lane push: move by step delta. If it goes beyond bounds, remove the pushed piece.
       const L2 = LANES[r2].L;
       const candidate = dest.step + dsSteps;
       if (candidate < 1 || candidate > L2) {
+        if (rootInfo) {
+          recordEvent(
+            `${rootInfo.name} pushed ${pushedName}'s piece off the board from ${fromCell}`,
+            rootInfo.name,
+            newGame
+          );
+        }
         const pl = newGame.players[occPi];
         pl.pieces = pl.pieces.filter(p=>p!==occPc);
         return;
       }
       s2 = candidate;
     } else {
-      // Cross-lane push: use geometric spaces and snap-down on gap
       let targetSpace = destSpace + dSpace;
       targetSpace = Math.max(1, Math.min(MAX_STEP, targetSpace));
       let landedSpace = tileTypeAtSpace(r2, targetSpace) === 'Gap' ? snapDownSpace(r2, targetSpace) : targetSpace;
       if(landedSpace < 1){
+        if (rootInfo) {
+          recordEvent(
+            `${rootInfo.name} pushed ${pushedName}'s piece off the board from ${fromCell}`,
+            rootInfo.name,
+            newGame
+          );
+        }
         const pl = newGame.players[occPi];
         pl.pieces = pl.pieces.filter(p=>p!==occPc);
         return;
       }
       s2 = stepForSpace(r2, landedSpace);
     }
-    applyPushChain(dest, {r:r2, step:s2}, newGame, occPc);
+
+    applyPushChain(dest, {r:r2, step:s2}, newGame, occPc, isSwoop, rootPusher);
+    const toCell = formatCell(r2, s2);
     occPc.r = r2; occPc.step = s2;
-    // After the pushed piece settles, it may pick up a basket at its new location
     afterMovePickup(occPc, newGame);
+    if (pusher === rootPusher && rootInfo) {
+      recordEvent(
+        `${rootInfo.name} pushed ${pushedName}'s piece from ${fromCell} to ${toCell}`,
+        rootInfo.name,
+        newGame
+      );
+    }
   }
 
   function performMoveWithPush(pc, target, newGame, isSwoop = false){
     const origin = {r: pc.r, step: pc.step};
-    applyPushChain(origin, target, newGame, pc, isSwoop);
+    applyPushChain(origin, target, newGame, pc, isSwoop, pc);
     pc.r = target.r; pc.step = target.step;
     afterMovePickup(pc, newGame);
+    const ownerInfo = findPieceOwner(newGame, pc);
+    if (ownerInfo && (origin.r !== target.r || origin.step !== target.step)) {
+      const fromCell = formatCell(origin.r, origin.step);
+      const toCell = formatCell(target.r, target.step);
+      const verb = isSwoop ? 'swooped' : 'moved';
+      recordEvent(
+        `${ownerInfo.name} ${verb} from ${fromCell} to ${toCell}`,
+        ownerInfo.name,
+        newGame
+      );
+    }
   }
 
   function useMove(){
@@ -1480,7 +2004,7 @@ export default function App(){
     const actualPiece = pl.pieces.find(p => p.r === pc.r && p.step === pc.step);
 
     if(actualPiece){
-      performMoveWithPush(actualPiece, target, newGame);
+      performMoveWithPush(actualPiece, target, newGame, true);
       showToast(`Free swoop to lane ${LANES[target.r].sum}!`);
     }
 
@@ -1542,6 +2066,13 @@ export default function App(){
     const pl = newGame.players[newGame.current];
     if(pl.swoopTokens>0) pl.swoopTokens = Math.max(0, pl.swoopTokens - 1);
     performMoveWithPush(pc, target, newGame, true); // isSwoop = true
+    const destLabel = formatCell(target.r, target.step);
+    showToast(`Swooped to ${destLabel}.`);
+    recordEvent(
+      `${pl.name} spent a swoop token and swooped to ${destLabel}. Tokens left: ${pl.swoopTokens || 0}.`,
+      pl.name,
+      newGame
+    );
     // Clear swoop selection state
     newGame.swoopSource = null;
     newGame.swoopTargets = null;
@@ -1738,15 +2269,9 @@ export default function App(){
           kept.push(pc);
         }
       } else {
-        // If on Final step, stay put; otherwise slide to previous checkpoint
-        if(pc.step === L){
-          kept.push(pc);
-        } else {
-          let dest=null;
-          for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
-          if(dest!==null){ pc.step=dest; kept.push(pc); }
-          // If no checkpoint below, remove piece as before
-        }
+        let dest=null;
+        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
+        if(dest!==null){ pc.step=dest; kept.push(pc); }
       }
     }
 
@@ -1755,6 +2280,11 @@ export default function App(){
     if(delivered > 0) {
       showToast(`${pl.name} delivered ${delivered}.`);
     }
+    recordEvent(
+      `${pl.name} banked${delivered > 0 ? ` and delivered ${delivered}` : ''}`,
+      pl.name,
+      newGame
+    );
     resolveDeterrents(pl, newGame);
     // Earn a swoop token on Bank (not on Bust)
     pl.swoopTokens = Math.min(2, (pl.swoopTokens || 0) + 1);
@@ -1791,18 +2321,21 @@ export default function App(){
         continue;
       }
 
-      // Treat Final step as a keep position too (do not slide off Final)
-      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint' || pc.step === LANES[pc.r].L){
+      if(pc.carrying){
+        let dest=null;
+        for(let s=pc.step; s<=LANES[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
+        if(dest!==null){ pc.step=dest; }
+        kept.push(pc);
+        continue;
+      }
+
+      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint'){
         kept.push(pc);
         continue;
       }
 
       let dest=null;
-      if(pc.carrying){
-        for(let s=pc.step; s<=LANES[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
-      } else {
-        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
-      }
+      for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
 
       if(dest===null){
         if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
@@ -1813,6 +2346,7 @@ export default function App(){
     pl.pieces=kept;
     resolveDeterrents(pl, newGame);
     pl.pieces.forEach(p=>p.active=false);
+    recordEvent(`${pl.name} busted.`, pl.name, newGame);
 
     // Check for victory after bust (in case any deliveries occurred)
     const victory = checkVictory(newGame);
@@ -1847,8 +2381,38 @@ export default function App(){
     }
   }
 
+  function togglePendingBotSeat(idx){
+    setPendingBotSeats(prev => {
+      const next = [...prev];
+      const makeBot = !next[idx];
+      next[idx] = makeBot;
+      setPendingBotTypes(prevTypes => {
+        const nextTypes = [...prevTypes];
+        nextTypes[idx] = makeBot ? (prevTypes[idx] || DEFAULT_BOT_TYPE) : null;
+        return nextTypes;
+      });
+      return next;
+    });
+  }
+
+  function cyclePendingBotType(idx){
+    if(!pendingBotSeats[idx]) return;
+    setPendingBotTypes(prev => {
+      const next = [...prev];
+      const current = next[idx] || DEFAULT_BOT_TYPE;
+      const order = BOT_TYPE_SEQUENCE;
+      const currIndex = Math.max(0, order.indexOf(current));
+      const nextType = order[(currIndex + 1) % order.length];
+      next[idx] = nextType;
+      return next;
+    });
+  }
+
   function openNewGameModal() {
     setPendingPlayerCount(game.playerCount);
+    const { seats, types } = snapshotBotPreferences(game.players);
+    setPendingBotSeats(seats);
+    setPendingBotTypes(types);
     setShowNewGameModal(true);
   }
 
@@ -1858,7 +2422,9 @@ export default function App(){
 
   function confirmNewGame() {
     const count = normalizePlayerCount(pendingPlayerCount);
-    setGame(initialGame(count));
+    const botSeats = pendingBotSeats.slice(0, count).map(Boolean);
+    const botTypes = pendingBotTypes.slice(0, count).map((type, idx) => botSeats[idx] ? (type || DEFAULT_BOT_TYPE) : null);
+    setGame(initialGame(count, { botSeats, botTypes }));
     setShowNewGameModal(false);
     showToast(`New ${count}-player game ready!`);
   }
@@ -1866,7 +2432,7 @@ export default function App(){
   // Save/Load functionality
   function getState(){
     return {
-      version: 'v6.0',
+      version: 'v6.1',
       playerCount: game.playerCount,
       players: game.players.map(p=>({
         name: p.name,
@@ -1876,6 +2442,8 @@ export default function App(){
         badgeIcon: p.badgeIcon,
         score: p.score,
         swoopTokens: p.swoopTokens || 0,
+        isBot: !!p.isBot,
+        botType: p.botType || (p.isBot ? DEFAULT_BOT_TYPE : null),
         pieces: p.pieces.map(x=>({...x}))
       })),
       current: game.current,
@@ -1890,7 +2458,8 @@ export default function App(){
       baskets: [...game.baskets],
       message: game.message,
       transferSource: game.transferSource ? {...game.transferSource} : null,
-      transferTargets: game.transferTargets ? [...game.transferTargets] : null
+      transferTargets: game.transferTargets ? [...game.transferTargets] : null,
+      events: Array.isArray(game.events) ? [...game.events] : []
     };
   }
 
@@ -1900,9 +2469,14 @@ function setState(state, options = {}){
     const inferredCount = Array.isArray(state.players) ? state.players.length : MIN_PLAYERS;
     const playerCount = normalizePlayerCount(state.playerCount || inferredCount);
     const rawPlayers = Array.isArray(state.players) ? state.players : [];
-    const basePlayers = buildPlayers(playerCount);
+    const botSeats = rawPlayers.map(p => !!(p && p.isBot));
+    const botTypes = rawPlayers.map(p => (p && p.botType) || null);
+    const basePlayers = buildPlayers(playerCount, { botSeats, botTypes });
     const players = basePlayers.map((base, idx) => {
       const raw = rawPlayers[idx] || {};
+      const isBot = raw.isBot ?? base.isBot ?? false;
+      const botType = raw.botType || base.botType || (isBot ? DEFAULT_BOT_TYPE : null);
+      const normalizedBotType = botType || (isBot ? DEFAULT_BOT_TYPE : null);
       return {
         ...base,
         name: raw.name || base.name,
@@ -1911,6 +2485,8 @@ function setState(state, options = {}){
         activeIcon: raw.activeIcon || base.activeIcon,
         badgeIcon: raw.badgeIcon || base.badgeIcon,
         swoopTokens: raw.swoopTokens ?? base.swoopTokens,
+        isBot,
+        botType: normalizedBotType,
         pieces: Array.isArray(raw.pieces) ? raw.pieces.map(x => ({ ...x })) : []
       };
     });
@@ -1947,7 +2523,8 @@ function setState(state, options = {}){
       topStepPiece: null,
       topStepTargets: null,
       quickMoveDir: null,
-      previousMode: null
+      previousMode: null,
+      events: Array.isArray(state.events) ? [...state.events] : []
     };
 
     setGame(newGame);
@@ -2007,12 +2584,12 @@ function setState(state, options = {}){
   }
 
   function quickSave(){
-    localStorage.setItem('SWOOP_STATE_V60', JSON.stringify(getState()));
+    localStorage.setItem('SWOOP_STATE_V61', JSON.stringify(getState()));
     showToast('Saved to browser.');
   }
 
   function quickLoad(){
-    const txt = localStorage.getItem('SWOOP_STATE_V60');
+    const txt = localStorage.getItem('SWOOP_STATE_V61') || localStorage.getItem('SWOOP_STATE_V60');
     if(!txt){
       showToast('No quick save found.');
       return;
@@ -2399,6 +2976,16 @@ function setState(state, options = {}){
     );
   }
 
+  // Derived paging values for event log (5 per page)
+  const eventsStartIndex = Math.max(0, eventPage * MAX_EVENT_ROWS);
+  const visibleEvents = events.slice(eventsStartIndex, eventsStartIndex + MAX_EVENT_ROWS);
+  const canPrevEvents = eventsStartIndex + MAX_EVENT_ROWS < events.length;
+  const canNextEvents = eventPage > 0;
+
+  const currentPlayer = game.players[game.current];
+  const isBotTurn = !!(currentPlayer && currentPlayer.isBot);
+  const botActionReady = isBotTurn && shouldProcessBot();
+
   return (
     <div className="mobile-game-container" style={{background: 'var(--bg)'}}>
       {showCover && (
@@ -2512,56 +3099,69 @@ function setState(state, options = {}){
         <div className="mobile-controls-container">
           {/* Primary Action Buttons (hidden for non-acting clients) */}
           {mpCanAct() && (
-          <div className="mobile-primary-controls">
-            {game.mode === 'preroll' && (
-              <button
-                className="mobile-button primary active"
-                onClick={roll}
-                disabled={game.mode !== 'preroll' || game.mode === 'gameOver' || !mpCanAct()}
-              >
-                🎲 Roll
-              </button>
-            )}
-            {/* Legacy Move button hidden; use per-sum ↑/↓ controls instead */}
-            <button
-              className="mobile-button"
-              onClick={useSwoop}
-              disabled={game.mode === 'gameOver' || !mpCanAct() || !canSwoopNow()}
-            >
-              🔄 Swoop Token
-            </button>
-            <button
-              className="mobile-button"
-              onClick={startTransfer}
-              disabled={game.mode === 'gameOver' || !mpCanAct() || !canTransfer()}
-            >
-              🔄 Transfer
-            </button>
-            <button
-              className="mobile-button"
-              onClick={bankOrBust}
-              disabled={(() => {
-                if (game.mode === 'gameOver') return true;
-                if (!mpCanAct()) return true;
-                if (game.mode === 'preroll') return false;
-                if (game.mode === 'rolled' || game.mode === 'pairChosen') {
-                  return anyMandatoryActionThisRoll();
-                }
-                return true;
-              })()}
-            >
-              {(() => {
-                if (game.mode === 'preroll') return '🏦 Bank';
-                if (game.mode === 'rolled' || game.mode === 'pairChosen') {
-                  const mandatory = anyMandatoryActionThisRoll();
-                  if (mandatory) return '❌ Must Move';
-                  // During a roll with no legal moves, only Bust is allowed
-                  return '💥 Bust';
-                }
-                return '🏦 Bank';
-              })()}
-            </button>
-          </div>
+            <div className="mobile-primary-controls">
+              {isBotTurn ? (
+                <button
+                  className="mobile-button primary active"
+                  onClick={handleBotPlay}
+                  disabled={!botActionReady}
+                  title={botActionReady ? 'Advance bot turn' : 'Bot not ready'}
+                >
+                  ▶ Play
+                </button>
+              ) : (
+                <>
+                  {game.mode === 'preroll' && (
+                    <button
+                      className="mobile-button primary active"
+                      onClick={roll}
+                      disabled={game.mode !== 'preroll' || game.mode === 'gameOver' || !mpCanAct()}
+                    >
+                      🎲 Roll
+                    </button>
+                  )}
+                  {/* Legacy Move button hidden; use per-sum ↑/↓ controls instead */}
+                  <button
+                    className="mobile-button"
+                    onClick={useSwoop}
+                    disabled={game.mode === 'gameOver' || !mpCanAct() || !canSwoopNow()}
+                  >
+                    🔄 Swoop Token
+                  </button>
+                  <button
+                    className="mobile-button"
+                    onClick={startTransfer}
+                    disabled={game.mode === 'gameOver' || !mpCanAct() || !canTransfer()}
+                  >
+                    🔄 Transfer
+                  </button>
+                  <button
+                    className="mobile-button"
+                    onClick={bankOrBust}
+                    disabled={(() => {
+                      if (game.mode === 'gameOver') return true;
+                      if (!mpCanAct()) return true;
+                      if (game.mode === 'preroll') return false;
+                      if (game.mode === 'rolled' || game.mode === 'pairChosen') {
+                        return anyMandatoryActionThisRoll();
+                      }
+                      return true;
+                    })()}
+                  >
+                    {(() => {
+                      if (game.mode === 'preroll') return '🏦 Bank';
+                      if (game.mode === 'rolled' || game.mode === 'pairChosen') {
+                        const mandatory = anyMandatoryActionThisRoll();
+                        if (mandatory) return '❌ Must Move';
+                        // During a roll with no legal moves, only Bust is allowed
+                        return '💥 Bust';
+                      }
+                      return '🏦 Bank';
+                    })()}
+                  </button>
+                </>
+              )}
+            </div>
           )}
 
           {/* Transfer Cancel Button */}
@@ -2666,6 +3266,7 @@ function setState(state, options = {}){
                   <span>{player.badgeIcon || PLAYER_PROFILES[idx]?.badgeIcon || `P${idx + 1}`}</span>
                   <span>{player.score}</span>
                   <span>• ✈️ {player.swoopTokens || 0}</span>
+                  {player.isBot ? <span>• 🤖</span> : null}
                 </div>
               ))}
             </div>
@@ -2685,6 +3286,63 @@ function setState(state, options = {}){
             <button className="mobile-button-small" onClick={openLoadModal}>📁 Load</button>
             <button className="mobile-button-small" onClick={quickSave}>⚡ Quick Save</button>
             <button className="mobile-button-small" onClick={quickLoad}>⚡ Quick Load</button>
+          </div>
+
+          <div className="event-log-container">
+            <div className="event-log-header">
+              <span>Recent Events</span>
+              <button
+                className="mobile-button-small"
+                onClick={() => setLogVisible(v => !v)}
+              >
+                {logVisible ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            {logVisible && (
+              <div className="event-log-table">
+                {events.length === 0 ? (
+                  <div className="event-log-empty">No events yet.</div>
+                ) : (
+                  <>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th style={{ width: '50px' }}>Tokens</th>
+                          <th>Event</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleEvents.map(entry => (
+                          <tr key={entry.id}>
+                            <td>{entry.playerStats || ''}</td>
+                            <td>{entry.message}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:6 }}>
+                      <div style={{ fontSize:'0.8rem', opacity:0.8 }}>
+                        Showing {Math.min(eventsStartIndex + 1, events.length)}–{Math.min(eventsStartIndex + visibleEvents.length, events.length)} of {events.length}
+                      </div>
+                      <div style={{ display:'flex', gap:6 }}>
+                        <button
+                          className="mobile-button-small"
+                          disabled={!canPrevEvents}
+                          onClick={() => setEventPage(p => p + 1)}
+                          title="Older events"
+                        >◀ Prev 5</button>
+                        <button
+                          className="mobile-button-small"
+                          disabled={!canNextEvents}
+                          onClick={() => setEventPage(p => Math.max(0, p - 1))}
+                          title="Newer events"
+                        >Next 5 ▶</button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2712,6 +3370,42 @@ function setState(state, options = {}){
                   {count} Players
                 </button>
               ))}
+            </div>
+            <div style={{ display:'flex', flexDirection:'column', gap:6, marginBottom:12 }}>
+              {Array.from({ length: pendingPlayerCount }).map((_, idx) => {
+                const profile = PLAYER_PROFILES[idx];
+                const isBot = !!pendingBotSeats[idx];
+                const botType = pendingBotTypes[idx] || DEFAULT_BOT_TYPE;
+                const botTypeLabel = BOT_TYPE_LABEL[botType] || botType;
+                return (
+                  <div
+                    key={`bot-seat-${idx}`}
+                    style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12 }}
+                  >
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <span style={{ fontSize:'1.1rem' }}>{profile?.badgeIcon || `P${idx + 1}`}</span>
+                      <strong>{profile?.defaultName || `Player ${idx + 1}`}</strong>
+                    </div>
+                    <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                      <button
+                        className={`mobile-button-small${isBot ? ' primary' : ''}`}
+                        onClick={() => togglePendingBotSeat(idx)}
+                      >
+                        {isBot ? 'Bot' : 'Human'}
+                      </button>
+                      {isBot && (
+                        <button
+                          className="mobile-button-small"
+                          onClick={() => cyclePendingBotType(idx)}
+                          title="Cycle bot strategy"
+                        >
+                          {`Strategy: ${botTypeLabel}`}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
             <div className="mobile-modal-buttons">
               <button className="mobile-button-small" onClick={cancelNewGameModal}>Cancel</button>

@@ -392,9 +392,12 @@ body {
   background-image: url('/RnD/crab_inactive1.png');
 }
 
-.swoop-piece[data-player="2"].active,
-.swoop-piece[data-player="2"].carry {
+.swoop-piece[data-player="2"].active {
   background-image: url('/RnD/crab_active1.png');
+}
+
+.swoop-piece[data-player="2"].carry {
+  background-image: url('/RnD/crab_carrying_basket1.png');
 }
 
 .swoop-piece[data-player="3"] {
@@ -422,6 +425,10 @@ body {
   right: -4px;
   top: -8px;
   font-size: 0.7rem;
+}
+
+.swoop-piece[data-player="2"].carry::after {
+  content: none;
 }
 
 /* Merged final step styles */
@@ -871,5 +878,57 @@ input, textarea, select {
 
   .mobile-button, .mobile-pair, .swoop-highlight {
     transition: none;
+  }
+}
+
+.event-log-container {
+  margin-top: 12px;
+  background: rgba(31, 41, 55, 0.55);
+  border-radius: 10px;
+  padding: 10px;
+  color: #f9fafb;
+  backdrop-filter: blur(6px);
+}
+
+.event-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.event-log-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.event-log-table th,
+.event-log-table td {
+  padding: 4px 6px;
+  text-align: left;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.event-log-table tr:last-child td {
+  border-bottom: none;
+}
+
+.event-log-empty {
+  font-size: 0.85rem;
+  color: rgba(249, 250, 251, 0.7);
+}
+
+@media (max-width: 768px) {
+  .event-log-container {
+    background: rgba(31, 41, 55, 0.5);
+  }
+  .event-log-header {
+    font-size: 0.9rem;
+  }
+  .event-log-table table {
+    font-size: 0.8rem;
   }
 }
