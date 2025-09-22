@@ -4,11 +4,11 @@ import react from '@vitejs/plugin-react';
 // Dev proxy target (fallback to 4000). Allow override via env.
 const DEV_BACKEND = process.env.VITE_SW_BACKEND_URL || 'http://localhost:4000';
 
-export default defineConfig(({ mode }) => {
-  // On GitHub Pages the app is served from /Swoop/, so ensure the bundle
-  // assets are requested from that prefix unless overridden.
-  const basePath =
-    process.env.VITE_BASE_PATH || (mode === 'production' ? '/Swoop/' : '/');
+export default defineConfig(() => {
+  // Prefer an explicit base path when provided (e.g. GitHub Pages sets
+  // VITE_BASE_PATH=/Swoop/). Otherwise serve assets from the site root so
+  // platforms like Vercel continue to work out of the box.
+  const basePath = process.env.VITE_BASE_PATH || '/';
 
   return {
     plugins: [react()],
