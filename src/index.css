@@ -271,6 +271,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  overflow-y: auto;
+  max-height: 40vh;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
 }
 
 .mobile-pair {
@@ -311,6 +315,20 @@ body {
 .pair-reason {
   font-size: 0.7rem;
   color: var(--muted);
+}
+
+/* Hide pair-reason descriptions in mobile view to save space */
+@media screen and (max-width: 768px) {
+  .pair-reason {
+    display: none;
+  }
+}
+
+/* Adjust mobile-pairs-container height for landscape orientation */
+@media screen and (max-width: 768px) and (orientation: landscape) {
+  .mobile-pairs-container {
+    max-height: 30vh;
+  }
 }
 
 /* Mobile Grid Cells */
@@ -404,9 +422,12 @@ body {
   background-image: url('/RnD/turtle_inactive1.png');
 }
 
-.swoop-piece[data-player="3"].active,
-.swoop-piece[data-player="3"].carry {
+.swoop-piece[data-player="3"].active {
   background-image: url('/RnD/turtle_active1.png');
+}
+
+.swoop-piece[data-player="3"].carry {
+  background-image: url('/RnD/turtle_with_basket1.png');
 }
 
 .swoop-piece[data-player="2"] > span,
@@ -427,7 +448,8 @@ body {
   font-size: 0.7rem;
 }
 
-.swoop-piece[data-player="2"].carry::after {
+.swoop-piece[data-player="2"].carry::after,
+.swoop-piece[data-player="3"].carry::after {
   content: none;
 }
 

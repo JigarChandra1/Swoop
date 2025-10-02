@@ -138,7 +138,7 @@ function stepForSpace(r, space) {
   return bestStep;
 }
 
-function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); return [...new Set(out)].filter(x=>x>=1&&x<L); }
+function checkpoints(L){ const out=[2]; if(L>=6) out.push(4); out.push(L-1); out.push(L); return [...new Set(out)].filter(x=>x>=1&&x<=L); }
 function deterrents(L,sum){ if(L<=3) return []; const det=[3,L-2]; if((sum===6||sum===8)&&L>=5) det.push(5); const cps=checkpoints(L); return [...new Set(det)].filter(x=>x>=1&&x<=L && !cps.includes(x)); }
 const oddSlope={3:+1,5:-1,7:-1,9:-1,11:+1};
 
@@ -185,6 +185,8 @@ function initialGame(playerCount = MIN_PLAYERS, options = {}){
     pieceChoices: null,
     selectedSum: null,
     previousMode: null,
+    basketReturnLanes: null,
+    basketsToReturn: 0,
     // Persisted event log (new): newest first
     events: []
   };
@@ -579,6 +581,9 @@ export default function App(){
     return {
       playerCount: game.playerCount,
       current: game.current,
+      mode: game.mode,
+      rollMovesDone: game.rollMovesDone || 0,
+      pendingAdvances: Array.isArray(game.pendingAdvances) ? [...game.pendingAdvances] : null,
       baskets: [...game.baskets],
       moveHistory: [],
       players: game.players.map(pl => ({
@@ -672,6 +677,7 @@ export default function App(){
     const seat = game.current;
     const pl = game.players[seat];
     if(!pl || (pl.swoopTokens || 0) <= 0) return false;
+    if((game.rollMovesDone || 0) > 0) return false;
     const pieceIndex = typeof decision.pcIndex === 'number' ? decision.pcIndex : (decision.plan && typeof decision.plan.pieceIndex === 'number' ? decision.plan.pieceIndex : null);
     const target = decision.target || (decision.plan && decision.plan.target);
     if(pieceIndex === null || !target) return false;
@@ -780,9 +786,13 @@ export default function App(){
             pairs.push({ i, j, sum: dice[i] + dice[j] });
           }
         }
-        const allowed = (game.mode === 'pairChosen' && game.pendingAdvances && game.pendingAdvances.length > 0) ? [game.pendingAdvances[0]] : allowedSumsForCurrentRoll();
+        const forcedSum = (game.mode === 'pairChosen' && game.pendingAdvances && game.pendingAdvances.length > 0)
+          ? game.pendingAdvances[0]
+          : null;
+        const rollPairs = forcedSum === null ? pairs : pairs.filter(p => p.sum === forcedSum);
+        const allowed = forcedSum === null ? allowedSumsForCurrentRoll() : [forcedSum];
         const snapshot = makeBotSnapshot();
-        const decision = runtime.bot.chooseAction({ game: snapshot, rng: runtime.rng, roll: { d:[...dice], pairs }, allowedSums: allowed, turnStats: runtime.turnStats });
+        const decision = runtime.bot.chooseAction({ game: snapshot, rng: runtime.rng, roll: { d:[...dice], pairs: rollPairs }, allowedSums: allowed, turnStats: runtime.turnStats });
         if(decision.type === 'swoop'){
           if(handleBotSwoopDecision(runtime, decision)) return;
         } else if(decision.type === 'move'){
@@ -1366,7 +1376,51 @@ export default function App(){
     if(game.mode === 'pairChosen' && game.pendingAdvances && game.selectedPair){
       return [{ type: 'single', sums: [game.selectedPair.sum], title: 'Forced move' }];
     }
-    return computeRollOptions();
+    const baseOptions = computeRollOptions();
+    if(!isMobile) return baseOptions;
+
+    const rows = [];
+    const singleBuffer = [];
+
+    const bundleSingles = (first, second) => {
+      const sumA = first?.sums?.[0];
+      const sumB = second?.sums?.[0];
+      if(sumA == null || sumB == null) return null;
+      const details = [
+        { sum: sumA, reason: first.reason || null, title: first.title || null },
+        { sum: sumB, reason: second.reason || null, title: second.title || null }
+      ];
+      return {
+        type: 'singlePair',
+        variant: 'either',
+        sums: [sumA, sumB],
+        title: `Either ${sumA} or ${sumB}`,
+        reason: `Choose either ${sumA} or ${sumB}.`,
+        singleDetails: details
+      };
+    };
+
+    const flushSingles = (force = false) => {
+      while(singleBuffer.length >= 2){
+        const combined = bundleSingles(singleBuffer.shift(), singleBuffer.shift());
+        if(combined) rows.push(combined);
+      }
+      if(force && singleBuffer.length === 1){
+        rows.push(singleBuffer.shift());
+      }
+    };
+
+    for(const option of baseOptions){
+      if(option.type === 'single'){
+        singleBuffer.push(option);
+        continue;
+      }
+      flushSingles(true);
+      rows.push(option);
+    }
+
+    flushSingles(true);
+    return rows;
   }
 
   // Prefer a double option when available; otherwise fall back to single option for the sum
@@ -1794,6 +1848,79 @@ export default function App(){
     newGame.baskets[r] = true;
   }
 
+  // Find all valid lanes where a basket can be returned when a carrying piece goes bust
+  function getValidBasketReturnLanes(newGame){
+    const validLanes = [];
+
+    // Check all even-numbered lanes (lanes with basket capability)
+    for(let r = 0; r < LANES.length; r++){
+      const lane = LANES[r];
+      if(!lane.basket) continue; // Only even-numbered lanes can receive baskets
+
+      const L = lane.L; // Last step of this lane
+
+      // Check if the last step has any pieces on it (from any player)
+      let hasAnyPiece = false;
+      for(const pl of newGame.players){
+        if(pl.pieces.some(pc => pc.r === r && pc.step === L)){
+          hasAnyPiece = true;
+          break;
+        }
+      }
+
+      if(hasAnyPiece){
+        validLanes.push(r);
+      }
+    }
+
+    return validLanes;
+  }
+
+  // Execute the basket return to a selected lane
+  function executeBasketReturn(selectedLane){
+    if(game.mode !== 'chooseBasketReturnLane' || !game.basketReturnLanes || game.basketsToReturn <= 0) return;
+
+    const newGame = {...game, baskets: [...game.baskets]};
+
+    // Return one basket to the selected lane
+    newGame.baskets[selectedLane] = true;
+    newGame.basketsToReturn -= 1;
+
+    const pl = newGame.players[newGame.current];
+    showToast(`Basket returned to lane ${LANES[selectedLane].sum}!`);
+    recordEvent(
+      `${pl.name} returned a basket to lane ${LANES[selectedLane].sum}`,
+      pl.name,
+      newGame
+    );
+
+    // If more baskets need to be returned, continue the selection process
+    if(newGame.basketsToReturn > 0){
+      const validLanes = getValidBasketReturnLanes(newGame);
+      if(validLanes.length > 0){
+        newGame.basketReturnLanes = validLanes;
+        newGame.message = `${pl.name}: Choose lane for basket ${newGame.basketsToReturn > 1 ? `(${newGame.basketsToReturn} remaining)` : ''}`;
+        setGame(newGame);
+        return;
+      } else {
+        // No valid lanes left, baskets are lost
+        newGame.basketsToReturn = 0;
+        showToast('No valid lanes remaining for basket return!');
+      }
+    }
+
+    // All baskets returned or no more valid lanes, continue with bust resolution
+    newGame.mode = 'preroll';
+    newGame.basketReturnLanes = null;
+    newGame.basketsToReturn = 0;
+    newGame.current = nextSeatIndex(newGame.current, newGame.playerCount);
+    newGame.rolled = null;
+    newGame.selectedPair = null;
+    newGame.pendingAdvances = null;
+    newGame.message = `${newGame.players[newGame.current].name}, roll the dice!`;
+    setGame(newGame);
+  }
+
   // Push-chain helpers: snap‑down + basket transfer are handled in applyPushChain
   // Space helpers for geometric pushes
   function tileTypeAtSpace(r, space){
@@ -2213,6 +2340,12 @@ export default function App(){
       if (occ && occ.pi === game.current && game.transferTargets && game.transferTargets.includes(occ.pc)) {
         executeTransfer(occ.pc);
       }
+    } else if (game.mode === 'chooseBasketReturnLane') {
+      // Click on a lane's last step to return a basket there
+      const lane = LANES[r];
+      if (lane && lane.basket && step === lane.L && game.basketReturnLanes && game.basketReturnLanes.includes(r)) {
+        executeBasketReturn(r);
+      }
     }
   }
 
@@ -2270,7 +2403,7 @@ export default function App(){
         }
       } else {
         let dest=null;
-        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
+        for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint' || tileTypeAt(pc.r, s)==='Final'){ dest=s; break; } }
         if(dest!==null){ pc.step=dest; kept.push(pc); }
       }
     }
@@ -2313,6 +2446,7 @@ export default function App(){
     const newGame = {...game, baskets: [...game.baskets]};
     const pl=newGame.players[newGame.current];
     const kept=[];
+    let basketsToReturn = 0; // Count baskets from removed carrying pieces
 
     for(const pc of pl.pieces){
       const onDet = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
@@ -2323,23 +2457,27 @@ export default function App(){
 
       if(pc.carrying){
         let dest=null;
-        for(let s=pc.step; s<=LANES[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
-        if(dest!==null){ pc.step=dest; }
-        kept.push(pc);
+        for(let s=pc.step; s<=LANES[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint' || tileTypeAt(pc.r, s)==='Final'){ dest=s; break; } }
+        if(dest!==null){
+          pc.step=dest;
+          kept.push(pc);
+        } else {
+          // No checkpoint ahead - piece is removed and basket needs to be returned
+          basketsToReturn++;
+        }
         continue;
       }
 
-      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint'){
+      if(tileTypeAt(pc.r, pc.step) === 'Checkpoint' || tileTypeAt(pc.r, pc.step) === 'Final'){
         kept.push(pc);
         continue;
       }
 
       let dest=null;
-      for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } }
+      for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint' || tileTypeAt(pc.r, s)==='Final'){ dest=s; break; } }
 
       if(dest===null){
-        if(pc.carrying && LANES[pc.r].basket) newGame.baskets[pc.r]=true;
-        // No checkpoint found: piece removed (original behavior)
+        // No checkpoint found: piece removed (carrying pieces are handled earlier)
       } else { pc.step=dest; kept.push(pc); }
     }
 
@@ -2359,6 +2497,23 @@ export default function App(){
 
     enforceTokenPolicy(newGame.players, newGame.playerCount);
 
+    // Handle basket returns if any baskets need to be returned
+    if(basketsToReturn > 0){
+      const validLanes = getValidBasketReturnLanes(newGame);
+      if(validLanes.length > 0){
+        newGame.mode = 'chooseBasketReturnLane';
+        newGame.basketReturnLanes = validLanes;
+        newGame.basketsToReturn = basketsToReturn;
+        newGame.message = `${pl.name}: Choose lane for basket return${basketsToReturn > 1 ? ` (${basketsToReturn} baskets)` : ''}`;
+        setGame(newGame);
+        return;
+      } else {
+        // No valid lanes for basket return, baskets are lost
+        showToast(`No valid lanes for basket return - ${basketsToReturn} basket${basketsToReturn > 1 ? 's' : ''} lost!`);
+      }
+    }
+
+    // Continue to next player
     newGame.current = nextSeatIndex(newGame.current, newGame.playerCount);
     newGame.mode='preroll';
     newGame.rolled=null;
@@ -2459,6 +2614,8 @@ export default function App(){
       message: game.message,
       transferSource: game.transferSource ? {...game.transferSource} : null,
       transferTargets: game.transferTargets ? [...game.transferTargets] : null,
+      basketReturnLanes: game.basketReturnLanes ? [...game.basketReturnLanes] : null,
+      basketsToReturn: game.basketsToReturn || 0,
       events: Array.isArray(game.events) ? [...game.events] : []
     };
   }
@@ -2524,6 +2681,8 @@ function setState(state, options = {}){
       topStepTargets: null,
       quickMoveDir: null,
       previousMode: null,
+      basketReturnLanes: state.basketReturnLanes || null,
+      basketsToReturn: state.basketsToReturn || 0,
       events: Array.isArray(state.events) ? [...state.events] : []
     };
 
@@ -2672,6 +2831,12 @@ function setState(state, options = {}){
       const pl = game.players[game.current];
       const piece = pl.pieces.find(p => p.r === r && p.step === step);
       return piece && game.transferTargets.includes(piece);
+    }
+
+    // Highlight valid basket return lanes (last step of even-numbered lanes with pieces)
+    if (game.mode === 'chooseBasketReturnLane' && game.basketReturnLanes) {
+      const lane = LANES[r];
+      return lane && lane.basket && step === lane.L && game.basketReturnLanes.includes(r);
     }
 
     return false;
@@ -2985,6 +3150,7 @@ function setState(state, options = {}){
   const currentPlayer = game.players[game.current];
   const isBotTurn = !!(currentPlayer && currentPlayer.isBot);
   const botActionReady = isBotTurn && shouldProcessBot();
+  const mustMoveThisRoll = (game.mode === 'rolled' || game.mode === 'pairChosen') && anyMandatoryActionThisRoll();
 
   return (
     <div className="mobile-game-container" style={{background: 'var(--bg)'}}>
@@ -3121,13 +3287,15 @@ function setState(state, options = {}){
                     </button>
                   )}
                   {/* Legacy Move button hidden; use per-sum ↑/↓ controls instead */}
-                  <button
-                    className="mobile-button"
-                    onClick={useSwoop}
-                    disabled={game.mode === 'gameOver' || !mpCanAct() || !canSwoopNow()}
-                  >
-                    🔄 Swoop Token
-                  </button>
+                  {!mustMoveThisRoll && (
+                    <button
+                      className="mobile-button"
+                      onClick={useSwoop}
+                      disabled={game.mode === 'gameOver' || !mpCanAct() || !canSwoopNow()}
+                    >
+                      🔄 Swoop Token
+                    </button>
+                  )}
                   <button
                     className="mobile-button"
                     onClick={startTransfer}
@@ -3143,7 +3311,7 @@ function setState(state, options = {}){
                       if (!mpCanAct()) return true;
                       if (game.mode === 'preroll') return false;
                       if (game.mode === 'rolled' || game.mode === 'pairChosen') {
-                        return anyMandatoryActionThisRoll();
+                        return mustMoveThisRoll;
                       }
                       return true;
                     })()}
@@ -3151,8 +3319,7 @@ function setState(state, options = {}){
                     {(() => {
                       if (game.mode === 'preroll') return '🏦 Bank';
                       if (game.mode === 'rolled' || game.mode === 'pairChosen') {
-                        const mandatory = anyMandatoryActionThisRoll();
-                        if (mandatory) return '❌ Must Move';
+                        if (mustMoveThisRoll) return '❌ Must Move';
                         // During a roll with no legal moves, only Bust is allowed
                         return '💥 Bust';
                       }
@@ -3191,49 +3358,61 @@ function setState(state, options = {}){
                   const pl = game.players[game.current];
                   return (
                     <div key={`${opt.type}:${opt.sums.join(',')}`} className={`mobile-pair ${selected ? 'selected' : ''}`} title={opt.title || ''}>
-                      <div style={{ display:'flex', gap:12, alignItems:'center', width:'100%', justifyContent:'space-between' }}>
+                      <div style={{ display:'flex', alignItems:'center', width:'100%', justifyContent:'space-between', columnGap:8, rowGap:7, flexWrap:'wrap' }}>
                         {opt.sums.map((sum, idx) => {
                           const upEnabled = directionalCandidatesForSum(pl, sum, 'up').length > 0;
                           const downEnabled = directionalCandidatesForSum(pl, sum, 'down').length > 0;
                           const leftEnabled = sidewaysCandidatesForSum(pl, sum, 'left').length > 0;
                           const rightEnabled = sidewaysCandidatesForSum(pl, sum, 'right').length > 0;
+                          const columnMeta = opt.singleDetails && opt.singleDetails[idx];
+                          const columnTitle = columnMeta?.reason
+                            ? `${columnMeta.sum}: ${columnMeta.reason}`
+                            : (columnMeta?.title || opt.title || '');
                           return (
-                            <div key={`sumcol-${sum}-${idx}`} style={{ display:'flex', alignItems:'center', gap:8 }}>
-                              <div className="pair-sum">{sum}</div>
-                              {mpCanAct() && (
-                              <div className="pair-actions" style={{ display:'flex', gap:6 }}>
-                                <button
-                                  className="mobile-button primary"
-                                  disabled={!upEnabled || !mpCanAct()}
-                                  onClick={() => quickMove(sum, 'up')}
-                                  title={`Move ${sum} Up`}
-                                >↑</button>
-                                <button
-                                  className="mobile-button ghost"
-                                  disabled={!downEnabled || !mpCanAct()}
-                                  onClick={() => quickMove(sum, 'down')}
-                                  title={`Move ${sum} Down`}
-                                >↓</button>
-                                {/* Sideways arrows appear only when applicable (top-step free swoop). */}
-                                {leftEnabled && (
+                            <React.Fragment key={`sumcol-${sum}-${idx}`}>
+                              <div
+                                style={{ display:'flex', alignItems:'center', columnGap:5, rowGap:4, flexWrap:'wrap' }}
+                                title={columnTitle || undefined}
+                              >
+                                <div className="pair-sum">{sum}</div>
+                                {mpCanAct() && (
+                                <div className="pair-actions" style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+                                  <button
+                                    className="mobile-button primary"
+                                    disabled={!upEnabled || !mpCanAct()}
+                                    onClick={() => quickMove(sum, 'up')}
+                                    title={`Move ${sum} Up`}
+                                  >↑</button>
                                   <button
                                     className="mobile-button ghost"
-                                    disabled={!mpCanAct()}
-                                    onClick={() => quickMove(sum, 'left')}
-                                    title={`Move ${sum} Sideways (Left)`}
-                                  >←</button>
-                                )}
-                                {rightEnabled && (
-                                  <button
-                                    className="mobile-button ghost"
-                                    disabled={!mpCanAct()}
-                                    onClick={() => quickMove(sum, 'right')}
-                                    title={`Move ${sum} Sideways (Right)`}
-                                  >→</button>
+                                    disabled={!downEnabled || !mpCanAct()}
+                                    onClick={() => quickMove(sum, 'down')}
+                                    title={`Move ${sum} Down`}
+                                  >↓</button>
+                                  {/* Sideways arrows appear only when applicable (top-step free swoop). */}
+                                  {leftEnabled && (
+                                    <button
+                                      className="mobile-button ghost"
+                                      disabled={!mpCanAct()}
+                                      onClick={() => quickMove(sum, 'left')}
+                                      title={`Move ${sum} Sideways (Left)`}
+                                    >←</button>
+                                  )}
+                                  {rightEnabled && (
+                                    <button
+                                      className="mobile-button ghost"
+                                      disabled={!mpCanAct()}
+                                      onClick={() => quickMove(sum, 'right')}
+                                      title={`Move ${sum} Sideways (Right)`}
+                                    >→</button>
+                                  )}
+                                </div>
                                 )}
                               </div>
+                              {opt.variant === 'either' && idx === 0 && opt.sums.length > 1 && (
+                                <div className="pair-divider">or</div>
                               )}
-                            </div>
+                            </React.Fragment>
                           );
                         })}
                       </div>

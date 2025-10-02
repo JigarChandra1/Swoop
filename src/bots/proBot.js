@@ -27,7 +27,8 @@ function checkpoints(L) {
   const out = [2];
   if (L >= 6) out.push(4);
   out.push(L - 1);
-  return [...new Set(out)].filter((x) => x >= 1 && x < L);
+  out.push(L); // Last step is always a checkpoint
+  return [...new Set(out)].filter((x) => x >= 1 && x <= L);
 }
 
 function deterrents(L, sum) {
@@ -186,7 +187,8 @@ function initialGame(playerCount = MIN_PLAYERS) {
     baskets: LANES.map((l) => l.basket),
     moveHistory: [], // Track all moves for analysis
     transferSource: null,
-    transferTargets: null
+    transferTargets: null,
+    rollMovesDone: 0,
   };
 }
 
@@ -690,6 +692,8 @@ function eligibleSwoopPiecesForSum(game, pl, _sumIgnored) {
 }
 
 function canSwoopWithSum(game, pl, _sumIgnored) {
+  const movesDone = game && typeof game.rollMovesDone === 'number' ? game.rollMovesDone : 0;
+  if (movesDone > 0) return false;
   if (!(pl.swoopTokens > 0)) return false;
   for (const pc of pl.pieces) {
     if (!pc.active) continue;
@@ -739,7 +743,7 @@ function bank(game) {
     } else {
       let dest = null;
       for (let s = pc.step; s >= 1; s--) {
-        if (tileTypeAt(pc.r, s) === 'Checkpoint') { dest = s; break; }
+        if (tileTypeAt(pc.r, s) === 'Checkpoint' || tileTypeAt(pc.r, s) === 'Final') { dest = s; break; }
       }
       if (dest !== null) {
         pc.step = dest;
@@ -755,6 +759,7 @@ function bank(game) {
   enforceTokenPolicy(game.players, game.playerCount);
   for (const p of pl.pieces) p.active = false;
   game.current = nextSeatIndex(game.current, game.playerCount);
+  game.rollMovesDone = 0;
   return delivered;
 }
 
@@ -1065,6 +1070,17 @@ function playTurn(game, bots, rng, metrics, targetScore) {
 
   // Loop rolling until bank or bust
   while (true) {
+    let rollActionType = null;
+    const markRollAction = (type) => {
+      if (rollActionType && rollActionType !== type) return false;
+      rollActionType = type;
+      return true;
+    };
+    const registerMove = () => {
+      game.rollMovesDone = (game.rollMovesDone || 0) + 1;
+    };
+
+    game.rollMovesDone = 0;
     const roll = roll4(rng);
     metrics.rolls++;
 
@@ -1087,23 +1103,34 @@ function playTurn(game, bots, rng, metrics, targetScore) {
           const pc = pcs[Math.floor(rng() * pcs.length)];
           const targs = potentialSwoops(game, pc);
           const target = targs[Math.floor(rng() * targs.length)];
-          if (pl.swoopTokens > 0) pl.swoopTokens -= 1;
-          const oldR = pc.r, oldStep = pc.step;
-          performMoveWithPush(game, pc, target, true);
-          game.moveHistory.push({ type: 'swoop', player: game.current, piece: { from: { r: oldR, step: oldStep }, to: { r: pc.r, step: pc.step } }, sum: 0, carrying: pc.carrying, turn: game.moveHistory.filter(m => m.type === 'turn_start').length });
-          turnStats.swoops++; turnStats.actionsThisTurn++;
-        } else {
-          const delivered = applyBust(game);
-          turnStats.deliveredThisTurn += delivered;
-          metrics.busts++; metrics.deliveries += delivered; metrics.turns++; metrics.turnsByPlayer[game.current]++;
-          return;
+          const swoopAllowed = markRollAction('swoop');
+          if (swoopAllowed) {
+            if (pl.swoopTokens > 0) pl.swoopTokens -= 1;
+            const oldR = pc.r, oldStep = pc.step;
+            performMoveWithPush(game, pc, target, true);
+            game.moveHistory.push({ type: 'swoop', player: game.current, piece: { from: { r: oldR, step: oldStep }, to: { r: pc.r, step: pc.step } }, sum: 0, carrying: pc.carrying, turn: game.moveHistory.filter(m => m.type === 'turn_start').length });
+            turnStats.swoops++;
+            turnStats.actionsThisTurn++;
+          }
+          if (swoopAllowed && bot.shouldBank(turnStats, rng, game)) {
+            const delivered = bank(game);
+            turnStats.deliveredThisTurn += delivered;
+            metrics.banks++;
+            metrics.deliveries += delivered;
+            metrics.turns++;
+            metrics.turnsByPlayer[game.current]++;
+            return;
+          }
+          continue;
         }
-      } else {
-        const delivered = applyBust(game);
-        turnStats.deliveredThisTurn += delivered;
-        metrics.busts++; metrics.deliveries += delivered; metrics.turns++; metrics.turnsByPlayer[game.current]++;
-        return;
       }
+      const delivered = applyBust(game);
+      turnStats.deliveredThisTurn += delivered;
+      metrics.busts++;
+      metrics.deliveries += delivered;
+      metrics.turns++;
+      metrics.turnsByPlayer[game.current]++;
+      return;
     }
 
     const ctx = { game, rng, roll, turnStats };
@@ -1124,8 +1151,11 @@ function playTurn(game, bots, rng, metrics, targetScore) {
         let pc = null;
         if (plan.spawn) {
           pc = pl.pieces[pl.pieces.length - 1];
-          turnStats.moves++;
-          turnStats.actionsThisTurn++;
+          if (markRollAction('move')) {
+            registerMove();
+            turnStats.moves++;
+            turnStats.actionsThisTurn++;
+          }
           continue;
         }
         if (typeof plan.pieceIndex === 'number' && plan.pieceIndex < pl.pieces.length) {
@@ -1136,35 +1166,43 @@ function playTurn(game, bots, rng, metrics, targetScore) {
         if (!pc) continue;
 
         if (plan.action === 'move' && plan.target) {
-          const before = { r: pc.r, step: pc.step };
-          performMoveWithPush(game, pc, plan.target);
-          game.moveHistory.push({
-            type: 'move',
-            player: game.current,
-            piece: { r: pc.r, from: before.step, to: pc.step },
-            carrying: pc.carrying,
-            turn: game.moveHistory.filter(m => m.type === 'turn_start').length
-          });
-          turnStats.moves++;
-          turnStats.actionsThisTurn++;
+          if (markRollAction('move')) {
+            const before = { r: pc.r, step: pc.step };
+            performMoveWithPush(game, pc, plan.target);
+            registerMove();
+            game.moveHistory.push({
+              type: 'move',
+              player: game.current,
+              piece: { r: pc.r, from: before.step, to: pc.step },
+              carrying: pc.carrying,
+              turn: game.moveHistory.filter(m => m.type === 'turn_start').length
+            });
+            turnStats.moves++;
+            turnStats.actionsThisTurn++;
+          }
           continue;
         }
         if (plan.action === 'move_down') {
-          if (canTopStepMoveDown(game, pc) && moveTopStepDown(game, pc)) {
+          if (markRollAction('move') && canTopStepMoveDown(game, pc) && moveTopStepDown(game, pc)) {
+            registerMove();
             turnStats.moves++;
             turnStats.actionsThisTurn++;
           }
           continue;
         }
         if (plan.action === 'top_swoop' && plan.target) {
-          if (performTopStepFreeSwoop(game, pc, plan.target)) {
+          if (markRollAction('swoop') && performTopStepFreeSwoop(game, pc, plan.target)) {
             turnStats.swoops++;
             turnStats.actionsThisTurn++;
           }
           continue;
         }
         // default activation
-        turnStats.actionsThisTurn++;
+        if (markRollAction('move')) {
+          registerMove();
+          turnStats.moves++;
+          turnStats.actionsThisTurn++;
+        }
         continue;
       }
       // Ensure or move piece
@@ -1181,7 +1219,8 @@ function playTurn(game, bots, rng, metrics, targetScore) {
           // Piece was already at top step, choose best action
           const topStepAction = chooseTopStepAction(game, pc);
           if (topStepAction === 'move_down' && canTopStepMoveDown(game, pc)) {
-            if (moveTopStepDown(game, pc)) {
+            if (markRollAction('move') && moveTopStepDown(game, pc)) {
+              registerMove();
               turnStats.moves++;
               turnStats.actionsThisTurn++;
             }
@@ -1190,7 +1229,7 @@ function playTurn(game, bots, rng, metrics, targetScore) {
             if (targets.length > 0) {
               // Choose best target (prefer carrying pieces to move toward home)
               const target = chooseBestTopStepSwoopTarget(targets, pc);
-              if (performTopStepFreeSwoop(game, pc, target)) {
+              if (markRollAction('swoop') && performTopStepFreeSwoop(game, pc, target)) {
                 turnStats.swoops++;
                 turnStats.actionsThisTurn++;
               }
@@ -1209,9 +1248,10 @@ function playTurn(game, bots, rng, metrics, targetScore) {
             const down = opts.find(o => o.step === had - 1);
             chosen = pc.carrying ? (down || up) : (up || down);
           }
-          if (chosen) {
+          if (chosen && markRollAction('move')) {
             const before = { r: pc.r, step: pc.step };
             performMoveWithPush(game, pc, chosen);
+            registerMove();
             game.moveHistory.push({
               type: 'move',
               player: game.current,
@@ -1224,13 +1264,16 @@ function playTurn(game, bots, rng, metrics, targetScore) {
           }
         } else {
           // freshly ensured; counts as action in our accounting
-          turnStats.moves++;
-          turnStats.actionsThisTurn++;
+          if (markRollAction('move')) {
+            registerMove();
+            turnStats.moves++;
+            turnStats.actionsThisTurn++;
+          }
         }
       }
 
       // Attempt a second move with the remaining two dice (if any)
-      if (decision.pair && roll.d.length === 4) {
+      if (decision.pair && roll.d.length === 4 && (rollActionType === null || rollActionType === 'move')) {
         const used = new Set([decision.pair.i, decision.pair.j]);
         const rem = [0,1,2,3].filter(k => !used.has(k));
         if (rem.length === 2) {
@@ -1244,14 +1287,15 @@ function playTurn(game, bots, rng, metrics, targetScore) {
               if (pc2.step === L2 && had2 === L2) {
                 const action2 = chooseTopStepAction(game, pc2);
                 if (action2 === 'move_down' && canTopStepMoveDown(game, pc2)) {
-                  if (moveTopStepDown(game, pc2)) {
+                  if (markRollAction('move') && moveTopStepDown(game, pc2)) {
+                    registerMove();
                     turnStats.moves++; turnStats.actionsThisTurn++;
                   }
                 } else if (action2 === 'free_swoop') {
                   const t2 = potentialTopStepSwoops(game, pc2);
                   if (t2.length > 0) {
                     const tgt2 = chooseBestTopStepSwoopTarget(t2, pc2);
-                    if (performTopStepFreeSwoop(game, pc2, tgt2)) {
+                    if (markRollAction('swoop') && performTopStepFreeSwoop(game, pc2, tgt2)) {
                       turnStats.swoops++; turnStats.actionsThisTurn++;
                     }
                   }
@@ -1265,14 +1309,18 @@ function playTurn(game, bots, rng, metrics, targetScore) {
                   const down2 = opts2.find(o => o.step === had2 - 1);
                   chosen2 = pc2.carrying ? (down2 || up2) : (up2 || down2);
                 }
-                if (chosen2) {
+                if (chosen2 && markRollAction('move')) {
                   const before2 = { r: pc2.r, step: pc2.step };
                   performMoveWithPush(game, pc2, chosen2);
+                  registerMove();
                   game.moveHistory.push({ type: 'move', player: game.current, piece: { r: pc2.r, from: before2.step, to: pc2.step }, carrying: pc2.carrying, turn: game.moveHistory.filter(m => m.type === 'turn_start').length });
                   turnStats.moves++; turnStats.actionsThisTurn++;
                 }
               } else {
-                turnStats.moves++; turnStats.actionsThisTurn++;
+                if (markRollAction('move')) {
+                  registerMove();
+                  turnStats.moves++; turnStats.actionsThisTurn++;
+                }
               }
             }
           }
@@ -1289,8 +1337,9 @@ function playTurn(game, bots, rng, metrics, targetScore) {
         pc = pl.pieces[decision.pcIndex];
       }
       if (pc) {
-        const pl = game.players[game.current];
-        if (pl.swoopTokens > 0) pl.swoopTokens -= 1;
+        if (!markRollAction('swoop')) continue;
+        const currentPlayer = game.players[game.current];
+        if (currentPlayer.swoopTokens > 0) currentPlayer.swoopTokens -= 1;
         const oldR = pc.r;
         const oldStep = pc.step;
         const target = plan && plan.target ? plan.target : decision.target;
@@ -1361,21 +1410,21 @@ function applyBust(game) {
     if (pc.carrying) {
       let dest = null;
       for (let s = pc.step; s <= L; s++) {
-        if (tileTypeAt(pc.r, s) === 'Checkpoint') { dest = s; break; }
+        if (tileTypeAt(pc.r, s) === 'Checkpoint' || tileTypeAt(pc.r, s) === 'Final') { dest = s; break; }
       }
       if (dest !== null) pc.step = dest;
       kept.push(pc);
       continue;
     }
 
-    if (tile === 'Checkpoint') {
+    if (tile === 'Checkpoint' || tile === 'Final') {
       kept.push(pc);
       continue;
     }
 
     let dest = null;
     for (let s = pc.step; s >= 1; s--) {
-      if (tileTypeAt(pc.r, s) === 'Checkpoint') { dest = s; break; }
+      if (tileTypeAt(pc.r, s) === 'Checkpoint' || tileTypeAt(pc.r, s) === 'Final') { dest = s; break; }
     }
     if (dest !== null) {
       pc.step = dest;
@@ -1397,6 +1446,7 @@ function applyBust(game) {
   for (const p of pl.pieces) p.active = false;
   enforceTokenPolicy(game.players, game.playerCount);
   game.current = nextSeatIndex(game.current, game.playerCount);
+  game.rollMovesDone = 0;
   return delivered;
 }
 
@@ -1582,6 +1632,7 @@ function cloneGameForSearch(game) {
     playerCount: game.playerCount,
     current: game.current,
     baskets: [...game.baskets],
+    rollMovesDone: game && typeof game.rollMovesDone === 'number' ? game.rollMovesDone : 0,
     moveHistory: [],
     players: game.players.map((pl) => ({
       name: pl.name,
@@ -1667,6 +1718,8 @@ function applyMovePlan(clone, plan, sum) {
   let pc = null;
   if (plan.spawn) {
     pc = pl.pieces[pl.pieces.length - 1];
+    clone.rollMovesDone = (clone.rollMovesDone || 0) + 1;
+    return clone;
   } else if (typeof plan.pieceIndex === 'number') {
     pc = pl.pieces[plan.pieceIndex];
   }
@@ -1675,11 +1728,14 @@ function applyMovePlan(clone, plan, sum) {
 
   if (plan.action === 'move' && plan.target) {
     performMoveWithPush(clone, pc, plan.target);
+    clone.rollMovesDone = (clone.rollMovesDone || 0) + 1;
   } else if (plan.action === 'move_down') {
     const downStep = LANES[pc.r].L - 1;
     if (downStep >= 1) performMoveWithPush(clone, pc, { r: pc.r, step: downStep });
+    clone.rollMovesDone = (clone.rollMovesDone || 0) + 1;
   } else if (plan.action === 'top_swoop' && plan.target) {
     performMoveWithPush(clone, pc, plan.target);
+    clone.rollMovesDone = (clone.rollMovesDone || 0) + 1;
   }
 
   return clone;
@@ -1787,6 +1843,8 @@ function generateMovePlans(game, roll, seat, depth, rng) {
 function generateSwoopPlans(game, seat, depth, rng) {
   const pl = game.players[seat];
   if (!pl || pl.swoopTokens <= 0) return [];
+  const movesDone = game && typeof game.rollMovesDone === 'number' ? game.rollMovesDone : 0;
+  if (movesDone > 0) return [];
   const results = [];
   const tokenCostRaw = PRO_SEARCH.SWOOP_TOKEN_COST - (pl.swoopTokens >= 2 ? PRO_WEIGHTS.TOKEN_RESERVE_VALUE : 0);
   const tokenCost = Math.max(0, tokenCostRaw);
@@ -2168,6 +2226,7 @@ function chooseActionPro(ctx) {
   const { game, rng, roll } = ctx;
   const allowedSet = Array.isArray(ctx.allowedSums) && ctx.allowedSums.length ? new Set(ctx.allowedSums) : null;
   const seat = game.current;
+  const movesDone = game && typeof game.rollMovesDone === 'number' ? game.rollMovesDone : 0;
   let movePlans = generateMovePlans(game, roll, seat, PRO_SEARCH.DEPTH, rng);
   if (allowedSet) {
     movePlans = movePlans.filter((cand) => allowedSet.has(cand.sum));
@@ -2176,6 +2235,9 @@ function chooseActionPro(ctx) {
   if (allowedSet) {
     // Always allow swoops; filtering here keeps API consistent if future variants use sum values
     swoopPlans = swoopPlans.filter((cand) => cand.type === 'swoop' || allowedSet.has(cand.sum));
+  }
+  if (movesDone > 0) {
+    swoopPlans = [];
   }
   const candidates = movePlans.concat(swoopPlans);
 

@@ -1,0 +1,103 @@
+{
+  "version": "v6.1",
+  "playerCount": 2,
+  "players": [
+    {
+      "name": "Player 1",
+      "profile": "🐒",
+      "pieceIcon": "🐒",
+      "activeIcon": "🐵",
+      "badgeIcon": "🍌",
+      "score": 0,
+      "swoopTokens": 0,
+      "isBot": false,
+      "botType": null,
+      "pieces": [
+        {
+          "r": 5,
+          "step": 5,
+          "carrying": true,
+          "active": true
+        }
+      ]
+    },
+    {
+      "name": "Player 2",
+      "profile": "🕊️",
+      "pieceIcon": "🕊️",
+      "activeIcon": "🦅",
+      "badgeIcon": "🪶",
+      "score": 0,
+      "swoopTokens": 1,
+      "isBot": false,
+      "botType": null,
+      "pieces": [
+        {
+          "r": 2,
+          "step": 5,
+          "carrying": false,
+          "active": false
+        },
+        {
+          "r": 4,
+          "step": 7,
+          "carrying": false,
+          "active": false
+        }
+      ]
+    }
+  ],
+  "current": 0,
+  "mode": "rolled",
+  "rolled": {
+    "d": [1, 2, 3, 4],
+    "pairings": [
+      [
+        {
+          "i": 0,
+          "j": 1,
+          "sum": 3
+        },
+        {
+          "i": 2,
+          "j": 3,
+          "sum": 7
+        }
+      ],
+      [
+        {
+          "i": 0,
+          "j": 2,
+          "sum": 4
+        },
+        {
+          "i": 1,
+          "j": 3,
+          "sum": 6
+        }
+      ],
+      [
+        {
+          "i": 0,
+          "j": 3,
+          "sum": 5
+        },
+        {
+          "i": 1,
+          "j": 2,
+          "sum": 5
+        }
+      ]
+    ]
+  },
+  "selectedPair": null,
+  "pendingAdvances": null,
+  "baskets": [true, false, false, false, false, false, false, false, true, false, true],
+  "message": "Player 1, choose a pairing!",
+  "transferSource": null,
+  "transferTargets": null,
+  "basketReturnLanes": null,
+  "basketsToReturn": 0,
+  "events": []
+}
+
