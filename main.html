@@ -36,9 +36,12 @@ button:disabled{opacity:.45;cursor:not-allowed}
 .piece.carry::after{content:'🧺'; position:absolute; right:-6px; top:-10px; font-size:14px;}
 .piece[data-player="2"],.piece[data-player="3"]{background-position:center;background-repeat:no-repeat;background-size:contain;font-size:0}
 .piece[data-player="2"]{background-image:url('/RnD/crab_inactive1.png');}
-.piece[data-player="2"].active,.piece[data-player="2"].carry{background-image:url('/RnD/crab_active1.png');}
+.piece[data-player="2"].active{background-image:url('/RnD/crab_active1.png');}
+.piece[data-player="2"].carry{background-image:url('/RnD/crab_carrying_basket1.png');}
+.piece[data-player="2"].carry::after,.piece[data-player="3"].carry::after{content:none;}
 .piece[data-player="3"]{background-image:url('/RnD/turtle_inactive1.png');}
-.piece[data-player="3"].active,.piece[data-player="3"].carry{background-image:url('/RnD/turtle_active1.png');}
+.piece[data-player="3"].active{background-image:url('/RnD/turtle_active1.png');}
+.piece[data-player="3"].carry{background-image:url('/RnD/turtle_with_basket1.png');}
 .ring{position:absolute;inset:-2px;border-radius:8px;border:2px solid var(--accent);pointer-events:none}
 /* Merged final step styles */
 .center.merged-final{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
@@ -1444,11 +1447,11 @@ function bust(){
   const kept=[];
   for(const pc of pl.pieces){
     const onDet = (tileTypeAt(pc.r, pc.step) === 'Deterrent');
-    const onCp = (tileTypeAt(pc.r, pc.step) === 'Checkpoint');
+    const onCp = (tileTypeAt(pc.r, pc.step) === 'Checkpoint' || tileTypeAt(pc.r, pc.step) === 'Final');
     if(onDet || onCp){ kept.push(pc); continue; }
     let dest = null;
-    if(pc.carrying){ for(let s=pc.step; s<=lanes[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } } }
-    else { for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint'){ dest=s; break; } } }
+    if(pc.carrying){ for(let s=pc.step; s<=lanes[pc.r].L; s++){ if(tileTypeAt(pc.r, s)==='Checkpoint' || tileTypeAt(pc.r, s)==='Final'){ dest=s; break; } } }
+    else { for(let s=pc.step; s>=1; s--){ if(tileTypeAt(pc.r, s)==='Checkpoint' || tileTypeAt(pc.r, s)==='Final'){ dest=s; break; } } }
     if(dest===null){
       if(pc.carrying && lanes[pc.r].basket){
         const ce=cells[pc.r][centerCol];
