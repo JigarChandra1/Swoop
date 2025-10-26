@@ -1976,6 +1976,7 @@ function ensurePusherTurnState(state, game, rng) {
   state.turnId = turnId;
   state.rollsThisTurn = 0;
   state.recentSums = [];
+  state.aggressiveTokenTarget = null; // Reset aggressive token target for new turn
   const seat = game.current;
   state.aggressive = decidePusherAggression(game, seat, rng);
   state.motif = selectPusherMotif(game, seat, rng, state.aggressive);
@@ -2064,6 +2065,43 @@ function scorePusherCandidate(game, seat, candidate, motif, roll, turnStats, sta
   score += motifAlignmentScore(game, seat, candidate, motif, roll, turnStats, state);
   if (state.aggressive) score += 35;
   if (motif && motif.risk === 'long' && motif.attempts < motif.maxAttempts) score += PUSHER_WEIGHTS.CONTINUE_BONUS;
+
+  // AGGRESSIVE RISK-TAKING WITH 2 SWOOP TOKENS:
+  // When bot has 2 swoop tokens, it should be more willing to move onto deterrents
+  // and take risks to make progress, since it has safety net of tokens to recover from busts.
+  const pl = game.players[seat];
+  const tokens = pl.swoopTokens || 0;
+  if (tokens === 2 && candidate.type === 'move' && candidate.plan && candidate.plan.target) {
+    const targetTile = tileTypeAt(candidate.plan.target.r, candidate.plan.target.step);
+    if (targetTile === 'Deterrent') {
+      // Significantly reduce the deterrent penalty when we have 2 tokens
+      // The base penalty is -170, so we add back most of it to encourage aggressive play
+      score += PUSHER_WEIGHTS.HAZARD_PENALTY * 0.85; // Reduce penalty by 85%
+    }
+  }
+
+  // PENALTY FOR SWOOPS WHEN USABLE MOVE PAIRS ARE AVAILABLE:
+  // If this is a swoop (token-based) and there are usable move pairs in the roll,
+  // heavily penalize the swoop to prefer using the rolled pairs instead.
+  if (candidate.type === 'swoop' && roll && roll.pairs) {
+    const usableSums = roll.pairs.filter(p => canMoveOnSum(game, pl, p.sum)).map(p => p.sum);
+
+    if (usableSums.length > 0) {
+      // Base penalty for having any usable pairs
+      score -= 300;
+
+      // Count duplicate sums (e.g., two 7s means we can move twice on lane 7)
+      const sumCounts = {};
+      usableSums.forEach(s => sumCounts[s] = (sumCounts[s] || 0) + 1);
+      const maxDuplicates = Math.max(...Object.values(sumCounts));
+
+      // Extra penalty if we have duplicate sums (can make multiple moves on same lane)
+      if (maxDuplicates >= 2) {
+        score -= 400; // Very strong penalty for wasting a double-move opportunity
+      }
+    }
+  }
+
   score += (rng() - 0.5) * PUSHER_WEIGHTS.RANDOM_NOISE;
   return score;
 }
@@ -2167,6 +2205,27 @@ function shouldBankPusher(turnStats, rng, game, state) {
     return false;
   }
 
+  // AGGRESSIVE BEHAVIOR WITH 2 SWOOP TOKENS:
+  // When bot starts a turn with 2 swoop tokens, implement very aggressive play:
+  // - 80% of the time: keep rolling until busted and use both swoops (tokens === 0)
+  // - 20% of the time: keep rolling until busted and use 1 swoop (tokens === 1)
+
+  // Initialize aggressive token strategy when starting with 2 tokens
+  if (tokens === 2 && state.aggressiveTokenTarget === null) {
+    // 80% chance to target using both tokens (0), 20% chance to target using one token (1)
+    state.aggressiveTokenTarget = localRng() < 0.8 ? 0 : 1;
+  }
+
+  // If an aggressive token target was set this turn, honor it regardless of current token count
+  if (state.aggressiveTokenTarget !== null && state.aggressiveTokenTarget !== undefined) {
+    // Keep rolling until we've used enough tokens to reach our target
+    if (me.swoopTokens > state.aggressiveTokenTarget) {
+      return false; // Don't bank, keep rolling aggressively
+    }
+    // Once we've reached our target token count (after busting), bank
+    return true;
+  }
+
   const { value: evBank } = simulateBankValue(game, seat);
   const samples = PUSHER_SEARCH.BANK_SAMPLES;
   let evContinueTotal = 0;
@@ -2247,6 +2306,43 @@ function chooseActionPro(ctx) {
 
   candidates.forEach((cand) => {
     cand.score = cand.value + (rng() - 0.5) * PRO_SEARCH.NOISE;
+
+    const pl = game.players[seat];
+    const tokens = pl.swoopTokens || 0;
+
+    // AGGRESSIVE RISK-TAKING WITH 2 SWOOP TOKENS:
+    // When bot has 2 swoop tokens, it should be more willing to move onto deterrents
+    // and take risks to make progress, since it has safety net of tokens to recover from busts.
+    if (tokens === 2 && cand.type === 'move' && cand.plan && cand.plan.target) {
+      const targetTile = tileTypeAt(cand.plan.target.r, cand.plan.target.step);
+      if (targetTile === 'Deterrent') {
+        // Significantly reduce the deterrent penalty when we have 2 tokens
+        // The base penalty is -220, so we add back most of it to encourage aggressive play
+        cand.score += PRO_WEIGHTS.DETERRENT_PENALTY * 0.85; // Reduce penalty by 85%
+      }
+    }
+
+    // PENALTY FOR SWOOPS WHEN USABLE MOVE PAIRS ARE AVAILABLE:
+    // If this is a swoop (token-based) and there are usable move pairs in the roll,
+    // heavily penalize the swoop to prefer using the rolled pairs instead.
+    if (cand.type === 'swoop' && roll && roll.pairs) {
+      const usableSums = roll.pairs.filter(p => canMoveOnSum(game, pl, p.sum)).map(p => p.sum);
+
+      if (usableSums.length > 0) {
+        // Base penalty for having any usable pairs
+        cand.score -= 300;
+
+        // Count duplicate sums (e.g., two 7s means we can move twice on lane 7)
+        const sumCounts = {};
+        usableSums.forEach(s => sumCounts[s] = (sumCounts[s] || 0) + 1);
+        const maxDuplicates = Math.max(...Object.values(sumCounts));
+
+        // Extra penalty if we have duplicate sums (can make multiple moves on same lane)
+        if (maxDuplicates >= 2) {
+          cand.score -= 400; // Very strong penalty for wasting a double-move opportunity
+        }
+      }
+    }
   });
 
   candidates.sort((a, b) => b.score - a.score);

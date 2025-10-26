@@ -310,6 +310,11 @@ export default function App(){
   const [mpName, setMpName] = React.useState('');
   const [mpCodeInput, setMpCodeInput] = React.useState('');
   const [mpPreferredSeat, setMpPreferredSeat] = React.useState('');
+  const [isOnline, setIsOnline] = React.useState(() => {
+    if (typeof navigator === 'undefined') return true;
+    return navigator.onLine ?? true;
+  });
+  const isOnlineRef = React.useRef(isOnline);
   const mpApplyingRef = React.useRef(false); // avoid push on remote apply
   const mpUnsubRef = React.useRef(null);
   const mpPushTimerRef = React.useRef(null);
@@ -324,6 +329,35 @@ export default function App(){
     setPendingBotSeats(seats);
     setPendingBotTypes(types);
   }, [game.players]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  React.useEffect(() => {
+    isOnlineRef.current = isOnline;
+  }, [isOnline]);
+
+  React.useEffect(() => {
+    if (isOnline) {
+      setMp(prev => {
+        if (prev.error === 'Offline mode — multiplayer disabled') {
+          return { ...prev, error: null };
+        }
+        return prev;
+      });
+    } else {
+      showToast('Offline mode — multiplayer disabled');
+    }
+  }, [isOnline]);
 
   const botAgentsRef = React.useRef({});
   const botPlanRef = React.useRef(null);
@@ -372,7 +406,7 @@ export default function App(){
 
     try { localStorage.setItem('SWOOP_STATE_V61', currJson); } catch (e) {}
     // Multiplayer: debounce push of state when connected and not applying remote
-    if (mp.connected && mp.playerId && !mpApplyingRef.current) {
+    if (isOnline && mp.connected && mp.playerId && !mpApplyingRef.current) {
       // Always attempt to push; server enforces turn ownership based on its pre-update state.
       // Avoid pushing transient/choice UIs that aren't fully serializable
         const transientModes = new Set([
@@ -389,6 +423,7 @@ export default function App(){
       }
       if (mpPushTimerRef.current) clearTimeout(mpPushTimerRef.current);
       mpPushTimerRef.current = setTimeout(async () => {
+        if (!isOnlineRef.current) return;
         try {
           const payload = { playerId: mp.playerId, token: mp.token, baseVersion: mp.version, state: JSON.parse(currJson) };
           const resp = await mpPushState(mp.code, payload);
@@ -416,16 +451,17 @@ export default function App(){
       }, 250);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [game]);
+  }, [game, isOnline]);
 
   // Clean up push timer on unmount
   React.useEffect(() => () => { if (mpPushTimerRef.current) clearTimeout(mpPushTimerRef.current); }, []);
 
   // Subscribe to room version updates via SSE
   React.useEffect(() => {
-    if (!mp.connected || !mp.code) return;
+    if (!mp.connected || !mp.code || !isOnline) return;
     if (mpUnsubRef.current) { try { mpUnsubRef.current(); } catch(_){} }
     const unsub = mpSubscribe(mp.code, async (data) => {
+      if (!isOnlineRef.current) return;
       if (!data || typeof data.version !== 'number') return;
       // Fetch latest state if version moved forward
       try {
@@ -452,7 +488,7 @@ export default function App(){
     mpUnsubRef.current = unsub;
     return () => { try { unsub(); } catch(_){} };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mp.connected, mp.code]);
+  }, [mp.connected, mp.code, isOnline]);
 
   // keep ref in sync with version
   React.useEffect(() => { mpVersionRef.current = mp.version; }, [mp.version]);
@@ -476,6 +512,11 @@ export default function App(){
   }, [game.mode]);
 
   async function mpDoCreate() {
+    if (!isOnline) {
+      showToast('Multiplayer requires an internet connection.');
+      setMp(prev => ({ ...prev, error: 'Offline mode — multiplayer disabled' }));
+      return;
+    }
     if (mp.joining) return;
     setMp(prev => ({ ...prev, joining: true, error:null }));
     try {
@@ -498,6 +539,11 @@ export default function App(){
   }
 
   async function mpDoJoin() {
+    if (!isOnline) {
+      showToast('Multiplayer requires an internet connection.');
+      setMp(prev => ({ ...prev, error: 'Offline mode — multiplayer disabled' }));
+      return;
+    }
     const code = (mpCodeInput || '').trim();
     if (!code) { showToast('Enter a room code'); return; }
     if (mp.joining) return;
@@ -3169,7 +3215,7 @@ function setState(state, options = {}){
           }}
           aria-label="Enter game"
         >
-          <img src="/RnD/cover2.png" alt="Swoop cover" aria-hidden="true" />
+          <img src="/RnD/cover4.png" alt="Swoop cover" aria-hidden="true" />
         </div>
       )}
       {/* Multiplayer Controls */}
@@ -3182,25 +3228,31 @@ function setState(state, options = {}){
               onChange={(e)=>setMpName(e.target.value)}
               placeholder="Your name"
               style={{ padding:'6px 8px', borderRadius:6, border:'1px solid #333', background:'#181818', color:'#eee' }}
+              disabled={!isOnline || mp.joining}
             />
             <input
               value={mpCodeInput}
               onChange={(e)=>setMpCodeInput(e.target.value)}
               placeholder="Room code (e.g. 123456)"
               style={{ padding:'6px 8px', borderRadius:6, border:'1px solid #333', background:'#181818', color:'#eee' }}
+              disabled={!isOnline || mp.joining}
             />
             <select
               value={mpPreferredSeat}
               onChange={(e)=>setMpPreferredSeat(e.target.value)}
               style={{ padding:'6px 8px', borderRadius:6, border:'1px solid #333', background:'#181818', color:'#eee' }}
+              disabled={!isOnline || mp.joining}
             >
               <option value="">Seat (auto)</option>
               {game.players.map((player, idx) => (
                 <option key={player.profile || idx} value={idx}>{`${idx + 1}: ${player.name}`}</option>
               ))}
             </select>
-            <button className="mobile-button" onClick={mpDoJoin} disabled={mp.joining}>Join</button>
-            <button className="mobile-button" onClick={mpDoCreate} disabled={mp.joining}>Create</button>
+            <button className="mobile-button" onClick={mpDoJoin} disabled={mp.joining || !isOnline}>Join</button>
+            <button className="mobile-button" onClick={mpDoCreate} disabled={mp.joining || !isOnline}>Create</button>
+            {!isOnline && (
+              <span style={{color:'#fcd34d'}}>Offline mode — multiplayer disabled</span>
+            )}
             {mp.error && <span style={{color:'#f88'}}>{mp.error}</span>}
           </>
         ) : (
