@@ -187,7 +187,7 @@ Notes and future considerations for bots (non-reactive for now):
 
 ## AAA Board Skin (visuals‑only)
 
-An optional AAA‑style skin is available for the main board (no rule changes; presentation only). It adds:
+The AAA‑style skin is now the default presentation for the main board (no rule changes; presentation only). It adds:
 
 - Fullscreen river background and dam/beach flourishes
 - Re‑skinned tiles (safe, checkpoint, danger/whirlpool)
@@ -195,13 +195,13 @@ An optional AAA‑style skin is available for the main board (no rule changes; p
 - Subtle connectors between tiles that can be swooped across
 - Compact overlay HUD; multiplayer bar hidden by default
 
-Enable it by appending `?skin=aaa` to the URL, e.g.:
+Load the classic skin by appending `?skin=classic` to the URL, e.g.:
 
 ```
-http://localhost:5173/?skin=aaa
+http://localhost:5173/?skin=classic
 ```
 
-The choice is stored in `localStorage` under `SWOOP_SKIN`; remove it or load without the query to revert.
+Switch back by using `?skin=aaa`. The current choice is stored in `localStorage` under `SWOOP_SKIN`; clear it or load with a different query to change skins.
 
 Asset note: The skin references images in `RnD/` for now. For production, copy/optimize them into `public/assets/aaa/` and adjust URLs if needed.
 

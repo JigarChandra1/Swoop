@@ -5,14 +5,20 @@ import App from './App.jsx';
 import './index.css';
 import './aaa-board/aaa.css';
 
-// Enable AAA skin via ?skin=aaa (persists in localStorage)
+// AAA skin is the default; override with ?skin=classic (stored in localStorage)
 try {
   const params = new URLSearchParams(window.location.search);
-  const skin = params.get('skin') || localStorage.getItem('SWOOP_SKIN');
-  if (skin === 'aaa') {
-    document.body.classList.add('skin-aaa');
-    localStorage.setItem('SWOOP_SKIN', 'aaa');
+  let skin = params.get('skin');
+  if (skin) {
+    localStorage.setItem('SWOOP_SKIN', skin);
+  } else {
+    skin = localStorage.getItem('SWOOP_SKIN');
   }
+  if (!skin) {
+    skin = 'aaa';
+    localStorage.setItem('SWOOP_SKIN', skin);
+  }
+  document.body.classList.toggle('skin-aaa', skin === 'aaa');
 } catch (_) {}
 
 ReactDOM.createRoot(document.getElementById('root')).render(
