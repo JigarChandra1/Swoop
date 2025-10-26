@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App.jsx';
 import './index.css';
 import './aaa-board/aaa.css';
@@ -19,3 +20,6 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <App />
   </React.StrictMode>
 );
+
+// Register the PWA service worker immediately so assets are cached on first load.
+registerSW({ immediate: true });
